@@ -1,0 +1,113 @@
+# Сборка установщиков Zvon: npm run dist (под текущую ОС) или через CI (.github/workflows/release.yml).
+appId: com.zvon.app
+productName: Zvon
+copyright: Copyright © Zvon contributors
+
+directories:
+  buildResources: build
+  output: release/${version}
+
+# В пакет попадает собранный код (out/), ресурсы (иконки трея) и зависимости из dependencies.
+files:
+  - out/**
+  - resources/**
+  - package.json
+  # Исходники и инструменты сборки mediasoup-worker не нужны — нужен только готовый бинарник.
+  - '!node_modules/mediasoup/worker/deps/**'
+  - '!node_modules/mediasoup/worker/src/**'
+  - '!node_modules/mediasoup/worker/include/**'
+  - '!node_modules/mediasoup/worker/test/**'
+  - '!node_modules/mediasoup/worker/fuzzer/**'
+  - '!node_modules/mediasoup/worker/subprojects/**'
+  - '!node_modules/mediasoup/worker/scripts/**'
+  - '!node_modules/mediasoup/worker/out/Release/subprojects/**'
+  - '!node_modules/mediasoup/worker/out/Release/**/*.{a,o,obj,lib,pdb,ilk,exp}'
+  - '!node_modules/mediasoup/worker/out/Release/mediasoup-worker.p/**'
+  - '!node_modules/mediasoup/worker/out/Release/meson-*/**'
+  - '!node_modules/**/*.{md,map,ts.map}'
+
+# Вне asar: исполняемые и нативные файлы нельзя запускать изнутри архива.
+asarUnpack:
+  - resources/**
+  - node_modules/mediasoup/worker/out/Release/mediasoup-worker*
+  - node_modules/better-sqlite3/**
+  - node_modules/uiohook-napi/**
+
+# Нативные модули (better-sqlite3, uiohook-napi) пересобираются под Electron и архитектуру цели.
+npmRebuild: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: Zvon-Setup-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Zvon
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - target: dmg
+  category: public.app-category.social-networking
+  icon: build/icon.png
+  artifactName: Zvon-${version}-mac-${arch}.${ext}
+  # Без платного сертификата Apple: ad-hoc подпись (без неё Apple Silicon считает приложение повреждённым).
+  identity: '-'
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Zvon использует микрофон для голосовых каналов.
+    NSCameraUsageDescription: Zvon использует камеру для видео в голосовых каналах.
+    NSAudioCaptureUsageDescription: Zvon может передавать звук системы во время демонстрации экрана.
+    NSScreenCaptureUsageDescription: Zvon показывает ваш экран друзьям во время демонстрации.
+
+dmg:
+  title: Zvon ${version}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Network
+  executableName: zvon
+  synopsis: Голос, экран и чат для друзей в локальной или виртуальной сети
+  description: Zvon — упрощённый аналог Discord без облаков. Один человек запускает сервер, остальные подключаются по IP (LAN, Hamachi, Radmin VPN, ZeroTier, Tailscale).
+  maintainer: Zvon <zvon@localhost>
+  artifactName: Zvon-${version}-linux-${arch}.${ext}
+  desktop:
+    entry:
+      Name: Zvon
+      Comment: Голос, экран и чат для друзей
+      Categories: Network;Chat;AudioVideo;
+      StartupWMClass: Zvon
+
+deb:
+  # Для захвата экрана на Wayland нужен PipeWire-портал; для трея — AppIndicator.
+  recommends:
+    - pipewire
+    - xdg-desktop-portal
+    - libappindicator3-1
+
+appImage:
+  artifactName: Zvon-${version}-linux-${arch}.AppImage
+
+publish: null

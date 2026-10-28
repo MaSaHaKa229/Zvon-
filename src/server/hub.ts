@@ -1,0 +1,667 @@
+/**
+ * Хаб: принимает WebSocket-подключения, проверяет hello, маршрутизирует запросы,
+ * рассылает события и отслеживает присутствие пользователей.
+ */
+import { createHash, timingSafeEqual } from 'node:crypto'
+import type { IncomingMessage } from 'node:http'
+import type { RawData, WebSocket, WebSocketServer } from 'ws'
+import { BITRATE, CloseCode, ErrorCode, LIMITS, PROTOCOL_VERSION, TIMINGS } from '../shared/constants'
+import { isRequestType, parseRequest } from '../shared/schemas'
+import type {
+  AdminSettings,
+  AdminStats,
+  ClientEnvelope,
+  EventMap,
+  EventType,
+  Message,
+  RequestMap,
+  RequestType,
+  ResponseMap,
+  ServerSnapshot,
+  UserInfo
+} from '../shared/types'
+import type { ServerConfig } from './config'
+import type { StoredUser, ZvonDb } from './db'
+import type { FileService } from './files'
+import type { Logger } from './logger'
+import { ClientSession, RequestError } from './session'
+import type { SfuService } from './sfu'
+import { VoiceManager } from './voice'
+
+type Handler<K extends RequestType> = (s: ClientSession, data: RequestMap[K]) => ResponseMap[K] | Promise<ResponseMap[K]>
+type Handlers = { [K in RequestType]: Handler<K> }
+
+/** Запросы, которые не тратят лимит частоты (служебные и массовые при входе в голос). */
+const RATE_EXEMPT = new Set<RequestType>([
+  'ping',
+  'typing',
+  'consume',
+  'consumer-resume',
+  'consumer-pause',
+  'transport-connect',
+  'voice-state-update',
+  'producer-pause',
+  'producer-resume',
+  'consumer-set-layers'
+])
+
+function hashSecret(s: string): Buffer {
+  return createHash('sha256').update(s, 'utf8').digest()
+}
+
+function secretEquals(a: string, b: string): boolean {
+  return timingSafeEqual(hashSecret(a), hashSecret(b))
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export class Hub {
+  private sessions = new Set<ClientSession>()
+  /** Активная сессия каждого вошедшего пользователя. */
+  private byUser = new Map<string, ClientSession>()
+  /** Пользователи, у которых оборвалась связь: ждём переподключения. */
+  private pendingLeave = new Map<string, { timer: NodeJS.Timeout; nickname: string; isAdmin: boolean }>()
+  private nextConnId = 1
+  private heartbeat: NodeJS.Timeout | null = null
+  private readonly handlers: Handlers
+  private closing = false
+  readonly voice: VoiceManager
+  /** Заблокированные хостом до перезапуска сервера: userId → ник. */
+  private banned = new Map<string, string>()
+  private readonly startedAt = Date.now()
+  private settings: AdminSettings
+  /** Вызывается, когда хост меняет настройки в панели (чтобы main сохранил лимит файла). */
+  onSettingsChanged: (s: AdminSettings) => void = () => undefined
+
+  constructor(
+    private wss: WebSocketServer,
+    private db: ZvonDb,
+    private cfg: ServerConfig,
+    private sfu: SfuService,
+    private files: FileService,
+    private log: Logger,
+    private onOnlineChange: (count: number) => void
+  ) {
+    this.voice = new VoiceManager(
+      sfu,
+      {
+        send: (userId, t, d) => this.byUser.get(userId)?.event(t, d),
+        broadcast: (t, d) => this.broadcast(t, d),
+        isVoiceChannel: (channelId) => this.db.getChannel(channelId)?.type === 'voice'
+      },
+      log.child('voice')
+    )
+    const num = (key: string): number | null => {
+      const v = Number(db.getSetting(key))
+      return db.getSetting(key) !== null && Number.isFinite(v) ? v : null
+    }
+    this.settings = {
+      maxIncomingKbps: num('maxIncomingKbps') ?? BITRATE.maxIncomingPerTransport / 1000,
+      maxOutgoingKbps: num('maxOutgoingKbps') ?? 0,
+      // Лимит файла из запуска хоста главнее сохранённого.
+      maxUploadMb: cfg.maxUploadMb
+    }
+    sfu.limits = { incoming: this.settings.maxIncomingKbps * 1000, outgoing: this.settings.maxOutgoingKbps * 1000 }
+
+    const v = this.voice
+    const admin = <T>(fn: (s: ClientSession) => T) => (s: ClientSession): T => {
+      if (!s.isAdmin) throw new RequestError(ErrorCode.Forbidden, 'Это может только хост')
+      return fn(s)
+    }
+    this.handlers = {
+      'admin-stats': admin(() => this.adminStats()),
+      'admin-settings': (s, d) => admin(() => this.updateSettings(d))(s),
+      'admin-kick': (s, d) => admin((self) => this.kick(self, d))(s),
+      'admin-unban': (s, d) =>
+        admin(() => {
+          this.banned.delete(d.userId)
+          return {}
+        })(s),
+      'channel-create': (s, d) => admin(() => this.createChannel(d))(s),
+      'channel-rename': (s, d) => admin(() => this.renameChannel(d))(s),
+      'channel-delete': (s, d) => admin(() => this.deleteChannel(d))(s),
+      'channel-move': (s, d) =>
+        admin(() => {
+          if (!this.db.getChannel(d.channelId)) throw new RequestError(ErrorCode.NotFound, 'Канал не найден')
+          this.db.moveChannel(d.channelId, d.direction)
+          this.broadcast('channels-updated', { channels: this.db.listChannels() })
+          return {}
+        })(s),
+      hello: (s, d) => this.handleHello(s, d),
+      ping: () => ({ time: Date.now() }),
+      'msg-send': (s, d) => this.handleSend(s, d),
+      'msg-edit': (s, d) => this.handleEdit(s, d),
+      'msg-delete': (s, d) => this.handleDelete(s, d),
+      'msg-history': (s, d) => this.handleHistory(s, d),
+      'profile-update': (s, d) => this.handleProfile(s, d),
+      typing: (s, d) => this.handleTyping(s, d),
+      'voice-join': (s, d) => v.join(s.userId!, d),
+      'voice-ready': (s, d) => v.ready(s.userId!, d),
+      'voice-leave': (s) => {
+        v.leave(s.userId!)
+        return {}
+      },
+      'voice-state-update': (s, d) => v.updateState(s.userId!, d),
+      'transport-create': (s, d) => v.createTransport(s.userId!, d),
+      'transport-connect': (s, d) => v.connectTransport(s.userId!, d),
+      'transport-restart-ice': (s, d) => v.restartIce(s.userId!, d),
+      produce: (s, d) => v.produce(s.userId!, d),
+      'producer-close': (s, d) => v.closeProducer(s.userId!, d),
+      'producer-pause': (s, d) => v.pauseProducer(s.userId!, d),
+      'producer-resume': (s, d) => v.resumeProducer(s.userId!, d),
+      consume: (s, d) => v.consume(s.userId!, d),
+      'consumer-resume': (s, d) => v.resumeConsumer(s.userId!, d),
+      'consumer-pause': (s, d) => v.pauseConsumer(s.userId!, d),
+      'consumer-set-layers': (s, d) => v.setConsumerLayers(s.userId!, d)
+    }
+  }
+
+  start(): void {
+    this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
+    this.heartbeat = setInterval(() => this.checkAlive(), TIMINGS.serverHeartbeatMs)
+  }
+
+  get voiceAvailable(): boolean {
+    return this.sfu.available
+  }
+
+  get onlineCount(): number {
+    return this.byUser.size + this.pendingLeave.size
+  }
+
+  /* ======================= подключения ======================= */
+
+  private onConnection(ws: WebSocket, req: IncomingMessage): void {
+    if (this.closing) {
+      ws.close(CloseCode.ServerShutdown, 'shutting down')
+      return
+    }
+    const remote = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
+    const s = new ClientSession(ws, this.nextConnId++, remote, this.log)
+    this.sessions.add(s)
+    this.log.info(`Новое подключение ${s.label}`)
+
+    s.helloTimer = setTimeout(() => {
+      if (!s.authenticated) {
+        this.log.warn(`${s.label}: не прислал hello вовремя`)
+        s.close(CloseCode.HelloTimeout, 'hello timeout')
+      }
+    }, TIMINGS.helloTimeoutMs)
+
+    ws.on('pong', () => {
+      s.isAlive = true
+    })
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) {
+        this.strike(s, 'бинарный кадр')
+        return
+      }
+      void this.onFrame(s, raw)
+    })
+    ws.on('close', (code) => this.onClose(s, code))
+    ws.on('error', (err) => this.log.warn(`Ошибка сокета ${s.label}`, err))
+  }
+
+  private strike(s: ClientSession, why: string): void {
+    s.badFrames++
+    this.log.warn(`${s.label}: неверный кадр (${why}), всего ${s.badFrames}`)
+    if (s.badFrames >= 10) s.close(CloseCode.Normal, 'too many bad frames')
+  }
+
+  private async onFrame(s: ClientSession, raw: RawData): Promise<void> {
+    let env: ClientEnvelope
+    try {
+      const text = Array.isArray(raw) ? Buffer.concat(raw).toString('utf8') : raw.toString()
+      const parsed: unknown = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || typeof (parsed as ClientEnvelope).t !== 'string') {
+        throw new Error('нет поля t')
+      }
+      env = parsed as ClientEnvelope
+    } catch (err) {
+      this.strike(s, (err as Error).message)
+      return
+    }
+
+    const { t, id } = env
+    const reqId = typeof id === 'number' ? id : 0
+    const fail = (code: ErrorCode, message: string): void => {
+      if (reqId) s.replyError(reqId, code, message)
+    }
+
+    if (!isRequestType(t)) {
+      fail(ErrorCode.BadRequest, `Неизвестный тип запроса: ${t}`)
+      return
+    }
+    if (!s.authenticated && t !== 'hello') {
+      fail(ErrorCode.NotAuthenticated, 'Сначала нужно представиться (hello)')
+      return
+    }
+    if (!RATE_EXEMPT.has(t) && !s.take()) {
+      fail(ErrorCode.RateLimited, 'Слишком много запросов, подождите немного')
+      return
+    }
+    const parsed = parseRequest(t, env.d)
+    if (!parsed.ok) {
+      fail(ErrorCode.BadRequest, parsed.message)
+      return
+    }
+    try {
+      const handler = this.handlers[t] as Handler<typeof t>
+      const result = await handler(s, parsed.data)
+      if (reqId) s.reply(reqId, result)
+    } catch (err) {
+      if (err instanceof RequestError) {
+        fail(err.code, err.message)
+      } else {
+        this.log.error(`Ошибка обработки ${t} от ${s.label}`, err)
+        fail(ErrorCode.Internal, 'Внутренняя ошибка сервера')
+      }
+    }
+  }
+
+  private onClose(s: ClientSession, code: number): void {
+    this.sessions.delete(s)
+    if (s.helloTimer) clearTimeout(s.helloTimer)
+    this.log.info(`Отключение ${s.label}, код ${code}`)
+    const userId = s.userId
+    if (!userId || this.byUser.get(userId) !== s) return
+    this.byUser.delete(userId)
+
+    // Намеренный выход — сразу; обрыв — даём время переподключиться.
+    const graceful = code === CloseCode.Normal || code === CloseCode.Kicked || this.closing
+    const finish = (): void => {
+      this.pendingLeave.delete(userId)
+      this.voice.leave(userId)
+      try {
+        this.db.touchUser(userId)
+      } catch (err) {
+        this.log.warn('Не удалось обновить last_seen', err)
+      }
+      this.broadcast('user-left', { userId })
+      this.onOnlineChange(this.onlineCount)
+      this.log.info(`${s.nickname} вышел(а)`)
+    }
+    if (graceful) {
+      finish()
+    } else {
+      const timer = setTimeout(finish, TIMINGS.reconnectGraceMs)
+      this.pendingLeave.set(userId, { timer, nickname: s.nickname, isAdmin: s.isAdmin })
+    }
+  }
+
+  private checkAlive(): void {
+    for (const s of this.sessions) {
+      if (!s.isAlive) {
+        this.log.warn(`${s.label}: нет ответа на ping, разрываю`)
+        s.ws.terminate()
+        continue
+      }
+      s.isAlive = false
+      try {
+        s.ws.ping()
+      } catch {
+        /* сокет уже закрывается */
+      }
+    }
+  }
+
+  /* ======================= рассылка ======================= */
+
+  broadcast<E extends EventType>(t: E, d: EventMap[E], except?: ClientSession): void {
+    for (const s of this.byUser.values()) {
+      if (s !== except) s.event(t, d)
+    }
+  }
+
+  /** Закрывает все подключения с уведомлением. */
+  shutdown(reason: string): void {
+    this.closing = true
+    if (this.heartbeat) clearInterval(this.heartbeat)
+    for (const p of this.pendingLeave.values()) clearTimeout(p.timer)
+    this.pendingLeave.clear()
+    this.voice.closeAll()
+    this.broadcast('server-closing', { reason })
+    for (const s of this.sessions) s.close(CloseCode.ServerShutdown, 'server shutdown')
+  }
+
+  /* ======================= пользователи ======================= */
+
+  private isOnline(userId: string): boolean {
+    return this.byUser.has(userId) || this.pendingLeave.has(userId)
+  }
+
+  private isAdminUser(userId: string): boolean {
+    return this.byUser.get(userId)?.isAdmin ?? this.pendingLeave.get(userId)?.isAdmin ?? false
+  }
+
+  private toUserInfo(u: StoredUser): UserInfo {
+    return {
+      id: u.id,
+      nickname: u.nickname,
+      avatar: u.avatar,
+      online: this.isOnline(u.id),
+      isAdmin: this.isAdminUser(u.id)
+    }
+  }
+
+  private userInfo(userId: string): UserInfo {
+    const u = this.db.getUser(userId)
+    if (!u) throw new RequestError(ErrorCode.NotFound, 'Пользователь не найден')
+    return this.toUserInfo(u)
+  }
+
+  /** Делает ник уникальным среди тех, кто сейчас в сети: «Вася» → «Вася (2)». */
+  private uniqueNickname(wanted: string, selfId: string): string {
+    const taken = new Set<string>()
+    for (const [id, s] of this.byUser) if (id !== selfId) taken.add(s.nickname.toLowerCase())
+    for (const [id, p] of this.pendingLeave) if (id !== selfId) taken.add(p.nickname.toLowerCase())
+    if (!taken.has(wanted.toLowerCase())) return wanted
+    for (let i = 2; i < 100; i++) {
+      const suffix = ` (${i})`
+      const candidate = wanted.slice(0, LIMITS.nicknameLength - suffix.length) + suffix
+      if (!taken.has(candidate.toLowerCase())) return candidate
+    }
+    return wanted.slice(0, LIMITS.nicknameLength - 7) + ` (${Date.now() % 10000})`
+  }
+
+  private snapshot(s: ClientSession): ServerSnapshot {
+    const users = this.db.listUsers().map((u) => this.toUserInfo(u))
+    return {
+      serverName: this.cfg.serverName,
+      serverVersion: this.cfg.version,
+      channels: this.db.listChannels(),
+      users,
+      you: this.userInfo(s.userId!),
+      voiceStates: this.voice.states(),
+      voiceError: this.sfu.error,
+      fileToken: s.fileToken,
+      maxUploadBytes: this.files.maxUploadBytes
+    }
+  }
+
+  /* ======================= обработчики ======================= */
+
+  private async handleHello(s: ClientSession, d: RequestMap['hello']): Promise<ServerSnapshot> {
+    if (s.authenticated) throw new RequestError(ErrorCode.BadRequest, 'Повторный hello')
+
+    if (d.protocol !== PROTOCOL_VERSION) {
+      s.close(CloseCode.AuthFailed, 'version mismatch')
+      throw new RequestError(
+        ErrorCode.VersionMismatch,
+        `Версии не совпадают: у вас протокол ${d.protocol}, у хоста ${PROTOCOL_VERSION}. Обновите приложение.`
+      )
+    }
+    if (this.cfg.password && !secretEquals(d.password, this.cfg.password)) {
+      this.log.warn(`${s.label}: неверный пароль`)
+      // Небольшая задержка усложняет перебор пароля.
+      await new Promise((r) => setTimeout(r, 700))
+      s.close(CloseCode.AuthFailed, 'wrong password')
+      throw new RequestError(ErrorCode.WrongPassword, 'Неверный пароль сервера')
+    }
+    if (this.closing) throw new RequestError(ErrorCode.Internal, 'Сервер останавливается')
+    if (this.banned.has(d.clientId)) {
+      s.close(CloseCode.AuthFailed, 'banned')
+      throw new RequestError(ErrorCode.Forbidden, 'Хост заблокировал вас на этом сервере до его перезапуска')
+    }
+
+    const userId = d.clientId
+    const isAdmin = Boolean(this.cfg.adminToken && d.adminToken && secretEquals(d.adminToken, this.cfg.adminToken))
+
+    // Тот же пользователь уже подключён (например, второе окно или «зависший» сокет) — вытесняем старое.
+    const previous = this.byUser.get(userId)
+    if (previous && previous !== s) {
+      this.log.info(`${previous.label} вытеснен новым подключением`)
+      this.byUser.delete(userId)
+      previous.userId = null
+      previous.close(CloseCode.Replaced, 'replaced')
+    }
+    const pending = this.pendingLeave.get(userId)
+    if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingLeave.delete(userId)
+    }
+    const returning = Boolean(previous || pending)
+    // Медиа старого подключения уже не восстановить без нового сигналинга:
+    // закрываем его, клиент сам заново войдёт в голос, если был там.
+    if (returning) this.voice.leave(userId)
+
+    const nickname = this.uniqueNickname(d.nickname, userId)
+    this.db.upsertUser(userId, nickname)
+    s.userId = userId
+    s.nickname = nickname
+    s.isAdmin = isAdmin
+    s.fileToken = this.files.issueToken(userId)
+    if (s.helloTimer) {
+      clearTimeout(s.helloTimer)
+      s.helloTimer = null
+    }
+    this.byUser.set(userId, s)
+
+    const info = this.userInfo(userId)
+    if (returning) this.broadcast('user-updated', { user: info }, s)
+    else this.broadcast('user-joined', { user: info }, s)
+    this.onOnlineChange(this.onlineCount)
+    this.log.info(`${s.label} вошёл(а)${isAdmin ? ' как администратор' : ''}${returning ? ' (переподключение)' : ''}`)
+
+    return this.snapshot(s)
+  }
+
+  private requireTextChannel(channelId: string): void {
+    const ch = this.db.getChannel(channelId)
+    if (!ch) throw new RequestError(ErrorCode.NotFound, 'Канал не найден')
+    if (ch.type !== 'text') throw new RequestError(ErrorCode.BadRequest, 'Это не текстовый канал')
+  }
+
+  /** Находит упоминания @ник и @everyone/@все в тексте. */
+  private extractMentions(content: string): string[] {
+    const lower = content.toLowerCase()
+    if (!lower.includes('@')) return []
+    const found = new Set<string>()
+    if (/(^|[^\p{L}\p{N}_])@(everyone|все)(?![\p{L}\p{N}_])/u.test(lower)) found.add('everyone')
+    // Сначала длинные ники, чтобы «@Вася Пупкин» не совпал с «@Вася».
+    const users = this.db.listUsers().sort((a, b) => b.nickname.length - a.nickname.length)
+    let rest = lower
+    for (const u of users) {
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegExp(u.nickname.toLowerCase())}(?![\\p{L}\\p{N}_])`, 'u')
+      if (re.test(rest)) {
+        found.add(u.id)
+        rest = rest.replace(re, '$1')
+      }
+    }
+    return [...found]
+  }
+
+  private handleSend(s: ClientSession, d: RequestMap['msg-send']): ResponseMap['msg-send'] {
+    this.requireTextChannel(d.channelId)
+    const content = d.content.replace(/\s+$/u, '')
+    let message: Message
+    try {
+      message = this.db.insertMessage(
+        {
+          channelId: d.channelId,
+          authorId: s.userId!,
+          authorName: s.nickname,
+          content,
+          mentions: this.extractMentions(content),
+          createdAt: Date.now()
+        },
+        [...new Set(d.attachments ?? [])]
+      )
+    } catch (err) {
+      if ((err as Error).message === 'ATTACHMENTS_INVALID') {
+        throw new RequestError(ErrorCode.BadRequest, 'Вложения не найдены или уже отправлены. Загрузите файлы заново.')
+      }
+      throw err
+    }
+    this.broadcast('msg-new', { message }, s)
+    return { message: { ...message, nonce: d.nonce } }
+  }
+
+  private handleEdit(s: ClientSession, d: RequestMap['msg-edit']): ResponseMap['msg-edit'] {
+    const existing = this.db.getMessage(d.messageId)
+    if (!existing) throw new RequestError(ErrorCode.NotFound, 'Сообщение не найдено')
+    if (existing.authorId !== s.userId) throw new RequestError(ErrorCode.Forbidden, 'Можно редактировать только свои сообщения')
+    const content = d.content.replace(/\s+$/u, '')
+    const message = this.db.updateMessage(d.messageId, content, this.extractMentions(content))
+    if (!message) throw new RequestError(ErrorCode.NotFound, 'Сообщение не найдено')
+    this.broadcast('msg-updated', { message }, s)
+    return { message }
+  }
+
+  private handleDelete(s: ClientSession, d: RequestMap['msg-delete']): ResponseMap['msg-delete'] {
+    const existing = this.db.getMessage(d.messageId)
+    if (!existing) throw new RequestError(ErrorCode.NotFound, 'Сообщение не найдено')
+    if (existing.authorId !== s.userId && !s.isAdmin) {
+      throw new RequestError(ErrorCode.Forbidden, 'Можно удалять только свои сообщения')
+    }
+    this.files.removeFromDisk(this.db.deleteMessage(d.messageId))
+    this.broadcast('msg-deleted', { messageId: d.messageId, channelId: existing.channelId }, s)
+    this.log.info(`${s.label} удалил(а) сообщение ${d.messageId}`)
+    return { messageId: d.messageId }
+  }
+
+  private handleHistory(_s: ClientSession, d: RequestMap['msg-history']): ResponseMap['msg-history'] {
+    this.requireTextChannel(d.channelId)
+    const page = this.db.history(d.channelId, d.before, d.limit ?? LIMITS.historyPage)
+    return { channelId: d.channelId, ...page }
+  }
+
+  private handleProfile(s: ClientSession, d: RequestMap['profile-update']): ResponseMap['profile-update'] {
+    if (d.avatar !== undefined) {
+      if (d.avatar !== null) {
+        const f = this.db.getFile(d.avatar)
+        if (!f || f.kind !== 'avatar' || f.uploaderId !== s.userId) {
+          throw new RequestError(ErrorCode.BadRequest, 'Аватарка не найдена — загрузите её заново')
+        }
+      }
+      const prev = this.db.setUserAvatar(s.userId!, d.avatar)
+      if (prev && prev !== d.avatar) this.files.deleteIds([prev])
+    }
+    const nickname = this.uniqueNickname(d.nickname, s.userId!)
+    this.db.upsertUser(s.userId!, nickname)
+    s.nickname = nickname
+    const user = this.userInfo(s.userId!)
+    this.broadcast('user-updated', { user }, s)
+    return { user }
+  }
+
+  /* ======================= панель хоста ======================= */
+
+  private async adminStats(): Promise<AdminStats> {
+    const [sfuStats, voiceStats] = await Promise.all([this.sfu.stats(), this.voice.userStats()])
+    const counts = this.voice.counts()
+    const users = [...this.byUser.values()].map((s) => {
+      const vs = voiceStats.get(s.userId!)
+      return {
+        userId: s.userId!,
+        nickname: s.nickname,
+        ip: s.remoteAddress,
+        isAdmin: s.isAdmin,
+        voiceChannelId: this.voice.channelOf(s.userId!),
+        sendKbps: vs?.sendKbps ?? 0,
+        recvKbps: vs?.recvKbps ?? 0,
+        producers: vs?.producers ?? 0,
+        consumers: vs?.consumers ?? 0,
+        connectedAt: s.connectedAt
+      }
+    })
+    return {
+      uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
+      memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      users,
+      sfu: {
+        available: this.sfu.available,
+        error: this.sfu.error,
+        cpuPercent: sfuStats.cpuPercent,
+        rooms: counts.rooms,
+        producers: counts.producers,
+        consumers: counts.consumers,
+        sendKbps: users.reduce((a, u) => a + u.sendKbps, 0),
+        recvKbps: users.reduce((a, u) => a + u.recvKbps, 0),
+        rtcPort: this.cfg.rtcPort,
+        listenIps: this.sfu.listenIps
+      },
+      files: { totalBytes: this.db.totalFilesSize() },
+      settings: { ...this.settings },
+      banned: [...this.banned].map(([userId, nickname]) => ({ userId, nickname }))
+    }
+  }
+
+  private async updateSettings(d: RequestMap['admin-settings']): Promise<ResponseMap['admin-settings']> {
+    const next: AdminSettings = { ...this.settings, ...Object.fromEntries(Object.entries(d).filter(([, v]) => v !== undefined)) }
+    const uploadChanged = next.maxUploadMb !== this.settings.maxUploadMb
+    this.settings = next
+    this.db.setSetting('maxIncomingKbps', String(next.maxIncomingKbps))
+    this.db.setSetting('maxOutgoingKbps', String(next.maxOutgoingKbps))
+    this.db.setSetting('maxUploadMb', String(next.maxUploadMb))
+    this.sfu.limits = { incoming: next.maxIncomingKbps * 1000, outgoing: next.maxOutgoingKbps * 1000 }
+    await this.voice.applyLimits()
+    if (uploadChanged) {
+      this.cfg.maxUploadMb = next.maxUploadMb
+      this.broadcast('server-settings', { maxUploadBytes: this.files.maxUploadBytes })
+    }
+    this.onSettingsChanged(next)
+    this.log.info(`Хост изменил настройки: ${JSON.stringify(next)}`)
+    return { settings: { ...next } }
+  }
+
+  private kick(self: ClientSession, d: RequestMap['admin-kick']): Record<string, never> {
+    if (d.userId === self.userId) throw new RequestError(ErrorCode.BadRequest, 'Нельзя отключить самого себя')
+    const target = this.byUser.get(d.userId)
+    const pending = this.pendingLeave.get(d.userId)
+    if (!target && !pending && !d.ban) throw new RequestError(ErrorCode.NotFound, 'Пользователь не в сети')
+    if (d.ban) this.banned.set(d.userId, target?.nickname ?? pending?.nickname ?? this.db.getUser(d.userId)?.nickname ?? '?')
+    if (target) {
+      target.event('server-closing', { reason: d.ban ? 'Хост заблокировал вас' : 'Хост отключил вас' })
+      target.close(CloseCode.Kicked, d.ban ? 'banned' : 'kicked')
+    } else if (pending) {
+      // Пользователь уже отвалился и ждёт переподключения — убираем сразу.
+      clearTimeout(pending.timer)
+      this.pendingLeave.delete(d.userId)
+      this.voice.leave(d.userId)
+      this.broadcast('user-left', { userId: d.userId })
+      this.onOnlineChange(this.onlineCount)
+    }
+    this.log.info(`Хост ${d.ban ? 'заблокировал' : 'отключил'} ${d.userId}`)
+    return {}
+  }
+
+  private createChannel(d: RequestMap['channel-create']): ResponseMap['channel-create'] {
+    if (this.db.listChannels().length >= 50) throw new RequestError(ErrorCode.Forbidden, 'Слишком много каналов (максимум 50)')
+    const channel = this.db.createChannel(d.name, d.type)
+    this.broadcast('channels-updated', { channels: this.db.listChannels() })
+    return { channel }
+  }
+
+  private renameChannel(d: RequestMap['channel-rename']): ResponseMap['channel-rename'] {
+    const channel = this.db.renameChannel(d.channelId, d.name)
+    if (!channel) throw new RequestError(ErrorCode.NotFound, 'Канал не найден')
+    this.broadcast('channels-updated', { channels: this.db.listChannels() })
+    return { channel }
+  }
+
+  private deleteChannel(d: RequestMap['channel-delete']): Record<string, never> {
+    const ch = this.db.getChannel(d.channelId)
+    if (!ch) throw new RequestError(ErrorCode.NotFound, 'Канал не найден')
+    if (ch.type === 'text' && this.db.listChannels().filter((c) => c.type === 'text').length <= 1) {
+      throw new RequestError(ErrorCode.BadRequest, 'Нельзя удалить последний текстовый канал')
+    }
+    if (ch.type === 'voice') this.voice.closeChannel(ch.id)
+    this.files.removeFromDisk(this.db.deleteChannel(ch.id))
+    this.broadcast('channels-updated', { channels: this.db.listChannels() })
+    this.log.info(`Канал «${ch.name}» удалён`)
+    return {}
+  }
+
+  private handleTyping(s: ClientSession, d: RequestMap['typing']): ResponseMap['typing'] {
+    const now = Date.now()
+    // Сервер дополнительно гасит слишком частые события.
+    if (now - s.lastTypingAt < TIMINGS.typingThrottleMs / 2) return {}
+    s.lastTypingAt = now
+    this.requireTextChannel(d.channelId)
+    this.broadcast('typing', { channelId: d.channelId, userId: s.userId! }, s)
+    return {}
+  }
+}

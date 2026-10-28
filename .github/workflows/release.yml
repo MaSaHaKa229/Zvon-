@@ -1,0 +1,122 @@
+# Сборка установщиков Zvon на трёх ОС.
+# - Любой push в main и pull request: сборка + автотест сервера, установщики — в артефактах запуска.
+# - Тег вида v1.2.3: то же самое + черновик релиза на GitHub со всеми установщиками.
+#
+# Каждая платформа и архитектура собирается на своей машине: mediasoup при `npm install`
+# скачивает (или собирает) mediasoup-worker именно под ту ОС и процессор, на которой идёт установка,
+# а electron-builder пересобирает нативные модули (better-sqlite3, uiohook-napi) под Electron.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            builder: --win --x64
+          - name: macOS Apple Silicon
+            os: macos-15
+            builder: --mac --arm64
+          - name: macOS Intel
+            # Последний образ GitHub с процессором Intel. Если метка устарела — см. README, раздел «Сборка установщиков».
+            os: macos-15-intel
+            builder: --mac --x64
+          - name: Linux x64
+            # Сборка на более старой Ubuntu — AppImage запустится и на дистрибутивах постарше.
+            os: ubuntu-22.04
+            builder: --linux --x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Python нужен mediasoup, если готовый mediasoup-worker для платформы не скачается и его придётся собирать.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Системные пакеты (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev rpm
+
+      - name: Установка зависимостей
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Проверка наличия mediasoup-worker
+        shell: bash
+        run: |
+          ls -la node_modules/mediasoup/worker/out/Release/ | grep -i mediasoup-worker
+
+      - name: Проверка типов
+        # Не блокирует сборку: ошибки типов видны в логе, но установщики всё равно соберутся.
+        continue-on-error: true
+        run: npm run typecheck
+
+      - name: Сборка кода
+        run: npm run build
+
+      - name: Автотест сервера (чат, файлы, голос, панель хоста)
+        run: node scripts/smoke-test.mjs
+
+      - name: Сборка установщика
+        shell: bash
+        env:
+          # Подпись кода не используется: сертификаты не нужны.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.builder }} --publish never
+
+      - name: Установщики в артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: zvon-${{ runner.os }}-${{ strategy.job-index }}
+          if-no-files-found: error
+          path: |
+            release/*/*.exe
+            release/*/*.dmg
+            release/*/*.AppImage
+            release/*/*.deb
+
+  release:
+    name: Черновик релиза
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Список файлов
+        run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*
