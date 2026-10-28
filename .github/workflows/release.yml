@@ -1,6 +1,10 @@
 # Сборка установщиков Zvon на трёх ОС.
 # - Любой push в main и pull request: сборка + автотест сервера, установщики — в артефактах запуска.
 # - Тег вида v1.2.3: то же самое + черновик релиза на GitHub со всеми установщиками.
+# - Вариант приложения: online (для сервера в интернете, по умолчанию) или lan (хост на своём ПК).
+#   Вручную: Actions → Build → Run workflow → edition. Адрес сервера по умолчанию для клиентов —
+#   переменная репозитория ZVON_SERVER (Settings → Secrets and variables → Actions → Variables).
+# - Docker-образ сервера собирается и проверяется отдельной задачей.
 #
 # Каждая платформа и архитектура собирается на своей машине: mediasoup при `npm install`
 # скачивает (или собирает) mediasoup-worker именно под ту ОС и процессор, на которой идёт установка,
@@ -13,6 +17,12 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      edition:
+        description: 'Вариант приложения'
+        type: choice
+        options: [online, lan]
+        default: online
 
 permissions:
   contents: write
@@ -25,6 +35,9 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      ZVON_EDITION: ${{ inputs.edition || 'online' }}
+      ZVON_SERVER: ${{ vars.ZVON_SERVER }}
     strategy:
       fail-fast: false
       matrix:
@@ -93,13 +106,37 @@ jobs:
       - name: Установщики в артефакты
         uses: actions/upload-artifact@v4
         with:
-          name: zvon-${{ runner.os }}-${{ strategy.job-index }}
+          name: zvon-${{ env.ZVON_EDITION }}-${{ runner.os }}-${{ strategy.job-index }}
           if-no-files-found: error
           path: |
             release/*/*.exe
             release/*/*.dmg
             release/*/*.AppImage
             release/*/*.deb
+
+  docker:
+    name: Docker-образ сервера
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка образа
+        run: docker build -t zvon-server .
+
+      - name: Автотест сервера внутри образа
+        run: docker run --rm -e ZVON_TEST_NODE=1 -v "$PWD/scripts:/app/scripts:ro" zvon-server node scripts/smoke-test.mjs
+
+      - name: Запуск как на VPS (настройки из переменных окружения)
+        run: |
+          docker run -d --name zvon --network host -e ZVON_PASSWORD=ci -e ZVON_ANNOUNCED_IP=auto -v "$RUNNER_TEMP/zvon-data:/data" zvon-server
+          for i in $(seq 1 30); do
+            if curl -skf https://127.0.0.1:7777/health; then echo; break; fi
+            sleep 1
+          done
+          docker logs zvon
+          curl -skf https://127.0.0.1:7777/health | grep -q '"requiresPassword":true'
+          docker logs zvon 2>&1 | grep -q 'Медиа слушает порт 40000'
+          docker rm -f zvon
 
   release:
     name: Черновик релиза

@@ -6,7 +6,7 @@
  *  2. Без интерфейса (для тестов и «безголового» хоста):
  *     ELECTRON_RUN_AS_NODE=1 electron out/main/server.js --data ./host-data --port 7777 --password secret
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:https'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -121,6 +121,7 @@ export async function startServer(
     // Ошибка SFU не мешает чату: сервер стартует, а голос сообщает причину.
     await sfu.start()
     const tls = loadOrCreateTls(cfg.dataDir, log.child('tls'))
+    log.info(`Отпечаток сертификата (сверьте с окном доверия у клиентов): ${tls.fingerprint}`)
     https = createServer({ key: tls.key, cert: tls.cert }, makeRequestHandler(cfg, () => hub, files, log.child('http')))
     https.on('clientError', (err, socket) => {
       log.debug('Ошибка TLS-клиента', (err as Error).message)
@@ -184,6 +185,15 @@ export async function startServer(
 
 /* ======================= точка входа процесса ======================= */
 
+/** Версия из package.json рядом со сборкой (out/main/server.js → ../../package.json). */
+function packageVersion(): string | undefined {
+  try {
+    return JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')).version
+  } catch {
+    return undefined
+  }
+}
+
 function bootstrap(): void {
   const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort
   let running: RunningServer | null = null
@@ -240,10 +250,12 @@ function bootstrap(): void {
   // Запуск без Electron UI.
   const argCfg = configFromArgv(process.argv.slice(2))
   if (!argCfg) {
-    console.error('Использование: server.js --data <каталог> [--port 7777] [--password пароль] [--name "Имя"] [--bind 0.0.0.0] [--rtc-port 40000] [--rtc-ips 26.1.2.3,192.168.1.5] [--max-upload-mb 500]')
+    console.error('Использование: server.js --data <каталог> [--port 7777] [--password пароль] [--name "Имя"] [--bind 0.0.0.0] [--rtc-port 40000] [--rtc-ips 26.1.2.3,192.168.1.5] [--announced-ip auto|1.2.3.4] [--max-upload-mb 500] [--admin-token токен]')
+    console.error('Каждый параметр можно задать переменной окружения: --rtc-port → ZVON_RTC_PORT, --data → ZVON_DATA и т. д.')
     process.exit(2)
   }
-  startServer({ ...argCfg, adminToken: argCfg.adminToken ?? '', version: process.env.ZVON_VERSION })
+  if (!argCfg.password) console.warn('ВНИМАНИЕ: пароль не задан — войти сможет любой, кто знает адрес сервера.')
+  startServer({ ...argCfg, adminToken: argCfg.adminToken ?? '', version: process.env.ZVON_VERSION || packageVersion() })
     .then((srv) => {
       running = srv
       // Строка для автотестов и скриптов — не менять формат.

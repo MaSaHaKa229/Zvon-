@@ -19,3 +19,20 @@ export function listAddresses(includeLoopback = false): NetAddress[] {
   }
   return sortAddresses(result)
 }
+
+/** Сервисы, которые возвращают внешний IPv4 запрашивающего простым текстом. */
+const PUBLIC_IP_SERVICES = ['https://api.ipify.org', 'https://ipv4.icanhazip.com', 'https://ifconfig.me/ip']
+
+/** Внешний IPv4 машины (для сервера за NAT). null — ни один сервис не ответил. */
+export async function detectPublicIp(timeoutMs = 5000): Promise<string | null> {
+  for (const url of PUBLIC_IP_SERVICES) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+      const text = (await res.text()).trim()
+      if (res.ok && /^\d{1,3}(\.\d{1,3}){3}$/.test(text)) return text
+    } catch {
+      // следующий сервис
+    }
+  }
+  return null
+}

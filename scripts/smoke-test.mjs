@@ -525,6 +525,16 @@ async function main() {
     await alice.waitFor('user-left', (d) => d.userId === rc.d.you.id)
     ok(true, 'обычный выход сразу рассылает user-left')
 
+    // В самом конце: блокировка закрывает вход с 127.0.0.1 для всех следующих проверок.
+    console.log('\nЗащита от перебора пароля')
+    const guessers = Array.from({ length: 9 }, (_, i) => new TestClient(`Перебор${i}`))
+    await Promise.all(guessers.map((g) => g.open()))
+    await Promise.all(guessers.map((g) => g.hello(`guess-${g.name}`)))
+    const late = new TestClient('Опоздавший')
+    await late.open()
+    const locked = await late.hello(PASSWORD)
+    ok(!locked.ok && /Слишком много/.test(locked.err.message), 'после 10 неверных паролей вход с адреса временно закрыт')
+
     for (const c of [alice, bob3, intruder]) c.ws?.close()
   } finally {
     child.kill('SIGTERM')

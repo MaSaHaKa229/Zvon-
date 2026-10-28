@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events'
 import * as mediasoup from 'mediasoup'
 import { BITRATE } from '../shared/constants'
 import type { ServerConfig } from './config'
-import { listAddresses } from './interfaces'
+import { detectPublicIp, listAddresses } from './interfaces'
 import type { Logger } from './logger'
 
 export type Worker = mediasoup.types.Worker
@@ -74,6 +74,8 @@ export class SfuService extends EventEmitter {
   listenIps: string[] = []
   limits: BitrateLimits = { incoming: BITRATE.maxIncomingPerTransport, outgoing: 0 }
   private lastCpu: { cpuMs: number; at: number } | null = null
+  /** Внешний IP из настроек (или найденный при 'auto'); пусто — не задан. */
+  private announcedIp = ''
 
   constructor(
     private cfg: ServerConfig,
@@ -87,6 +89,7 @@ export class SfuService extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    if (this.cfg.announcedIp && !this.announcedIp) this.announcedIp = await this.resolveAnnouncedIp()
     try {
       await this.spawn()
       this.error = null
@@ -94,6 +97,14 @@ export class SfuService extends EventEmitter {
       this.error = describeError(err, this.cfg.rtcPort)
       this.log.error(`SFU не запустился: ${this.error}`, err)
     }
+  }
+
+  private async resolveAnnouncedIp(): Promise<string> {
+    if (this.cfg.announcedIp !== 'auto') return this.cfg.announcedIp
+    const ip = await detectPublicIp()
+    if (ip) this.log.info(`Внешний IP определён автоматически: ${ip}`)
+    else this.log.warn('Не удалось узнать внешний IP — голос будет объявлен на адресах сетевых карт. Задайте его вручную.')
+    return ip ?? ''
   }
 
   private resolveIps(): string[] {
@@ -106,6 +117,25 @@ export class SfuService extends EventEmitter {
     const worker = await mediasoup.createWorker({ logLevel: 'warn', logTags: ['ice', 'dtls', 'rtp', 'rtcp', 'srtp'] })
     this.log.info(`mediasoup-worker запущен, pid ${worker.pid}`)
     worker.on('died', (err) => this.onWorkerDied(worker, err))
+
+    if (this.announcedIp) {
+      // Сервер за NAT (облачный VPS): слушаем на всех адресах, клиентам сообщаем внешний.
+      try {
+        this.webRtcServer = await worker.createWebRtcServer({
+          listenInfos: [
+            { protocol: 'udp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port: this.cfg.rtcPort },
+            { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port: this.cfg.rtcPort }
+          ]
+        })
+      } catch (err) {
+        worker.close()
+        throw err
+      }
+      this.worker = worker
+      this.listenIps = [this.announcedIp]
+      this.log.info(`Медиа слушает порт ${this.cfg.rtcPort} (UDP и TCP), внешний адрес для клиентов: ${this.announcedIp}`)
+      return
+    }
 
     const ips = this.resolveIps()
     const perIp: ListenInfo[] = ips.flatMap((ip): ListenInfo[] => [

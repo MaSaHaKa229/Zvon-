@@ -318,13 +318,14 @@ function run(): void {
       log.info(`Добавлено доверие к ${hostName}:${port} (${fp})`)
     })
 
-    ipcMain.handle('server:remember', (_e, h: unknown, p: unknown, name: unknown, password: unknown) => {
+    ipcMain.handle('server:remember', (_e, h: unknown, p: unknown, name: unknown, password: unknown, adminToken: unknown) => {
       const { h: hostName, p: port } = assertHostPort(h, p)
       return store.rememberServer(
         hostName,
         port,
         typeof name === 'string' ? name.slice(0, LIMITS.serverNameLength) : hostName,
-        typeof password === 'string' && password ? password.slice(0, LIMITS.passwordLength) : undefined
+        typeof password === 'string' && password ? password.slice(0, LIMITS.passwordLength) : undefined,
+        typeof adminToken === 'string' && adminToken ? adminToken.slice(0, 128) : undefined
       )
     })
 

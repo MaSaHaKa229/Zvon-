@@ -11,6 +11,8 @@ export interface RecentServer {
   lastUsed: number
   /** Пароль сохраняется только если пользователь поставил галочку «Запомнить пароль». */
   password?: string
+  /** Ключ администратора — сохраняется вместе с паролем. */
+  adminToken?: string
 }
 
 export interface TrustedCert {
@@ -135,7 +137,7 @@ export interface ZvonApi {
   setNickname(nickname: string): Promise<void>
   probeServer(host: string, port: number): Promise<ProbeResult>
   trustServer(host: string, port: number, fingerprint: string): Promise<void>
-  rememberServer(host: string, port: number, name: string, password?: string): Promise<RecentServer[]>
+  rememberServer(host: string, port: number, name: string, password?: string, adminToken?: string): Promise<RecentServer[]>
   forgetServer(host: string, port: number): Promise<RecentServer[]>
   startHost(settings: HostSettings): Promise<HostStatus>
   stopHost(): Promise<HostStatus>

@@ -118,7 +118,7 @@ async function openSession(target: ConnTarget, serverName: string): Promise<void
         clientId: boot.clientId,
         nickname: getApp().nickname.trim(),
         password: target.password,
-        adminToken: isOwnServer ? boot.adminToken : undefined
+        adminToken: isOwnServer ? boot.adminToken : target.adminToken || undefined
       }
     },
     {
@@ -163,7 +163,8 @@ async function openSession(target: ConnTarget, serverName: string): Promise<void
     target.host,
     target.port,
     isOwnServer ? `${serverName} ${t('host.mine')}` : serverName,
-    target.remember ? target.password : undefined
+    target.remember ? target.password : undefined,
+    target.remember ? target.adminToken : undefined
   )
   setApp({ connecting: false, recentServers, screen: 'main' })
   if (me) setNicknameDraft(me.nickname)

@@ -8,3 +8,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 *.tsbuildinfo
+
+# Сервер на VPS: настройки и данные
+deploy/.env
+deploy/data/

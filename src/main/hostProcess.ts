@@ -89,6 +89,7 @@ export class HostController extends EventEmitter {
       version: app.getVersion(),
       rtcPort: settings.rtcPort,
       rtcIps: [],
+      announcedIp: '',
       maxUploadMb: settings.maxUploadMb
     }
 

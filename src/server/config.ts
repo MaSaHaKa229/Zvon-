@@ -18,6 +18,11 @@ export interface ServerConfig {
   rtcPort: number
   /** IPv4-адреса, на которых слушает медиа. Пусто — все подходящие адреса автоматически. */
   rtcIps: string[]
+  /**
+   * Внешний IPv4, который сообщается клиентам для голоса (сервер за NAT, например VPS в облаке).
+   * 'auto' — узнать через интернет при запуске; пусто — объявлять адреса сетевых карт.
+   */
+  announcedIp: string
   /** Максимальный размер одного файла, МБ. */
   maxUploadMb: number
 }
@@ -41,6 +46,15 @@ export type ServerToParent =
   | { type: 'online'; count: number }
   /** Хост изменил лимит файла в панели — main сохранит его в настройках запуска. */
   | { type: 'settings'; maxUploadMb: number }
+
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
+
+function normalizeAnnouncedIp(value: string | undefined): string {
+  const v = (value ?? '').trim().toLowerCase()
+  if (!v || v === 'auto') return v
+  if (!IPV4.test(v)) throw new Error(`Внешний IP должен быть IPv4-адресом или auto: ${value}`)
+  return v
+}
 
 export function normalizeConfig(input: Partial<ServerConfig> & { dataDir: string }): ServerConfig {
   const port = Number(input.port ?? DEFAULT_PORT)
@@ -68,17 +82,26 @@ export function normalizeConfig(input: Partial<ServerConfig> & { dataDir: string
     version: input.version || '0.0.0',
     rtcPort,
     maxUploadMb,
-    rtcIps: (input.rtcIps ?? []).filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip))
+    rtcIps: (input.rtcIps ?? []).filter((ip) => IPV4.test(ip)),
+    announcedIp: normalizeAnnouncedIp(input.announcedIp)
   }
 }
 
-/** Разбор аргументов для запуска без UI: `--port 7777 --password x --name "..." --data ./dir`. */
-export function configFromArgv(argv: string[]): (Partial<ServerConfig> & { dataDir: string }) | null {
+/**
+ * Разбор аргументов для запуска без UI: `--port 7777 --password x --name "..." --data ./dir`.
+ * Любой параметр можно задать и переменной окружения: `--rtc-port` → `ZVON_RTC_PORT` (удобно для Docker).
+ */
+export function configFromArgv(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env
+): (Partial<ServerConfig> & { dataDir: string }) | null {
   const get = (flag: string): string | undefined => {
     const i = argv.indexOf(flag)
     if (i >= 0 && i + 1 < argv.length) return argv[i + 1]
     const pref = argv.find((a) => a.startsWith(flag + '='))
-    return pref ? pref.slice(flag.length + 1) : undefined
+    if (pref) return pref.slice(flag.length + 1)
+    const fromEnv = env[`ZVON_${flag.slice(2).replace(/-/g, '_').toUpperCase()}`]
+    return fromEnv === '' ? undefined : fromEnv
   }
   const dataDir = get('--data')
   if (!dataDir) return null
@@ -91,6 +114,7 @@ export function configFromArgv(argv: string[]): (Partial<ServerConfig> & { dataD
     rtcPort: get('--rtc-port') ? Number(get('--rtc-port')) : undefined,
     maxUploadMb: get('--max-upload-mb') ? Number(get('--max-upload-mb')) : undefined,
     rtcIps: get('--rtc-ips')?.split(',').map((s) => s.trim()).filter(Boolean),
+    announcedIp: get('--announced-ip'),
     adminToken: get('--admin-token')
   }
 }

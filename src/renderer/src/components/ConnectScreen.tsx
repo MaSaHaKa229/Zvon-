@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DEFAULT_PORT, DEFAULT_RTC_PORT, LIMITS } from '../../../shared/constants'
 import { parseHostInput } from '../../../shared/net'
+import { DEFAULT_SERVER, ONLINE_EDITION } from '../edition'
 import { useApp } from '../store/app'
 import {
   beginConnect,
@@ -34,7 +35,7 @@ export function ConnectScreen() {
           <div className="brand-logo">Z</div>
           <div>
             <h1>Zvon</h1>
-            <p>{t('connect.tagline')}</p>
+            <p>{t(ONLINE_EDITION ? 'connect.taglineOnline' : 'connect.tagline')}</p>
           </div>
         </div>
 
@@ -49,17 +50,23 @@ export function ConnectScreen() {
           />
         </label>
 
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'join'} className={tab === 'join' ? 'tab active' : 'tab'} onClick={() => setTab('join')}>
-            {t('connect.tabJoin')}
-          </button>
-          <button role="tab" aria-selected={tab === 'host'} className={tab === 'host' ? 'tab active' : 'tab'} onClick={() => setTab('host')}>
-            {t('connect.tabHost')}
-            {hostState === 'running' && <span className="dot-live" />}
-          </button>
-        </div>
+        {ONLINE_EDITION ? (
+          <JoinForm />
+        ) : (
+          <>
+            <div className="tabs" role="tablist">
+              <button role="tab" aria-selected={tab === 'join'} className={tab === 'join' ? 'tab active' : 'tab'} onClick={() => setTab('join')}>
+                {t('connect.tabJoin')}
+              </button>
+              <button role="tab" aria-selected={tab === 'host'} className={tab === 'host' ? 'tab active' : 'tab'} onClick={() => setTab('host')}>
+                {t('connect.tabHost')}
+                {hostState === 'running' && <span className="dot-live" />}
+              </button>
+            </div>
 
-        {tab === 'join' ? <JoinForm /> : <HostForm />}
+            {tab === 'join' ? <JoinForm /> : <HostForm />}
+          </>
+        )}
 
         {error && (
           <div className="error-box" role="alert">
@@ -86,9 +93,11 @@ function JoinForm() {
   const recent = useApp((s) => s.recentServers)
   const [address, setAddress] = useState(() => {
     const r = recent[0]
-    return r ? (r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`) : ''
+    return r ? (r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`) : DEFAULT_SERVER
   })
   const [password, setPassword] = useState(() => recent[0]?.password ?? '')
+  const [adminToken, setAdminToken] = useState(() => recent[0]?.adminToken ?? '')
+  const [showAdmin, setShowAdmin] = useState(() => Boolean(recent[0]?.adminToken))
   const [remember, setRemember] = useState(true)
   const [localError, setLocalError] = useState<string | null>(null)
 
@@ -96,19 +105,24 @@ function JoinForm() {
     e?.preventDefault()
     const parsed = parseHostInput(address, DEFAULT_PORT)
     if (!parsed) {
-      setLocalError(t('connect.errAddress'))
+      setLocalError(t(ONLINE_EDITION ? 'connect.errAddressOnline' : 'connect.errAddress'))
       return
     }
     setLocalError(null)
-    void beginConnect({ host: parsed.host, port: parsed.port, password, remember })
+    void beginConnect({ host: parsed.host, port: parsed.port, password, adminToken: showAdmin ? adminToken.trim() : '', remember })
   }
 
   return (
     <form className="form" onSubmit={submit}>
       <label className="field">
-        <span className="field-label">{t('connect.address')}</span>
-        <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={t('connect.addressPlaceholder')} spellCheck={false} />
-        <span className="hint">{t('connect.addressHint')}</span>
+        <span className="field-label">{t(ONLINE_EDITION ? 'connect.addressOnline' : 'connect.address')}</span>
+        <input
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder={t(ONLINE_EDITION ? 'connect.addressPlaceholderOnline' : 'connect.addressPlaceholder')}
+          spellCheck={false}
+        />
+        <span className="hint">{t(ONLINE_EDITION ? 'connect.addressHintOnline' : 'connect.addressHint')}</span>
       </label>
       <label className="field">
         <span className="field-label">{t('connect.password')}</span>
@@ -124,6 +138,23 @@ function JoinForm() {
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
         {t('connect.rememberPassword')}
       </label>
+      <label className="checkbox">
+        <input type="checkbox" checked={showAdmin} onChange={(e) => setShowAdmin(e.target.checked)} />
+        {t('connect.iAmAdmin')}
+      </label>
+      {showAdmin && (
+        <label className="field">
+          <span className="field-label">{t('connect.adminToken')}</span>
+          <input
+            type="password"
+            value={adminToken}
+            maxLength={128}
+            onChange={(e) => setAdminToken(e.target.value)}
+            placeholder={t('connect.adminTokenPlaceholder')}
+            spellCheck={false}
+          />
+        </label>
+      )}
       {localError && <div className="error-box">{localError}</div>}
       <button className="btn btn-primary btn-wide" type="submit" disabled={connecting}>
         {connecting ? t('connect.joining') : t('connect.join')}
@@ -144,7 +175,15 @@ function JoinForm() {
                   onClick={() => {
                     setAddress(r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`)
                     setPassword(r.password ?? '')
-                    void beginConnect({ host: r.host, port: r.port, password: r.password ?? '', remember: Boolean(r.password) })
+                    setAdminToken(r.adminToken ?? '')
+                    setShowAdmin(Boolean(r.adminToken))
+                    void beginConnect({
+                      host: r.host,
+                      port: r.port,
+                      password: r.password ?? '',
+                      adminToken: r.adminToken ?? '',
+                      remember: Boolean(r.password || r.adminToken)
+                    })
                   }}
                 >
                   <ServerIcon width={18} height={18} />

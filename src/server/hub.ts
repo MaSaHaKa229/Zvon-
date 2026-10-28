@@ -57,6 +57,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+const MAX_PASSWORD_FAILS = 10
+const PASSWORD_LOCK_MS = 15 * 60 * 1000
+
 export class Hub {
   private sessions = new Set<ClientSession>()
   /** Активная сессия каждого вошедшего пользователя. */
@@ -70,6 +73,8 @@ export class Hub {
   readonly voice: VoiceManager
   /** Заблокированные хостом до перезапуска сервера: userId → ник. */
   private banned = new Map<string, string>()
+  /** Неудачные попытки пароля по IP: после MAX_PASSWORD_FAILS вход с адреса закрыт на PASSWORD_LOCK_MS. */
+  private passwordFails = new Map<string, { count: number; firstAt: number }>()
   private readonly startedAt = Date.now()
   private settings: AdminSettings
   /** Вызывается, когда хост меняет настройки в панели (чтобы main сохранил лимит файла). */
@@ -383,6 +388,24 @@ export class Hub {
 
   /* ======================= обработчики ======================= */
 
+  private isPasswordLocked(ip: string): boolean {
+    const f = this.passwordFails.get(ip)
+    if (!f) return false
+    if (Date.now() - f.firstAt > PASSWORD_LOCK_MS) {
+      this.passwordFails.delete(ip)
+      return false
+    }
+    return f.count >= MAX_PASSWORD_FAILS
+  }
+
+  private notePasswordFail(ip: string): void {
+    const now = Date.now()
+    const f = this.passwordFails.get(ip)
+    if (!f || now - f.firstAt > PASSWORD_LOCK_MS) this.passwordFails.set(ip, { count: 1, firstAt: now })
+    else f.count++
+    if (this.passwordFails.size > 10000) this.passwordFails.clear()
+  }
+
   private async handleHello(s: ClientSession, d: RequestMap['hello']): Promise<ServerSnapshot> {
     if (s.authenticated) throw new RequestError(ErrorCode.BadRequest, 'Повторный hello')
 
@@ -393,7 +416,12 @@ export class Hub {
         `Версии не совпадают: у вас протокол ${d.protocol}, у хоста ${PROTOCOL_VERSION}. Обновите приложение.`
       )
     }
+    if (this.cfg.password && this.isPasswordLocked(s.remoteAddress)) {
+      s.close(CloseCode.AuthFailed, 'too many attempts')
+      throw new RequestError(ErrorCode.WrongPassword, 'Слишком много неверных паролей. Попробуйте через 15 минут.')
+    }
     if (this.cfg.password && !secretEquals(d.password, this.cfg.password)) {
+      this.notePasswordFail(s.remoteAddress)
       this.log.warn(`${s.label}: неверный пароль`)
       // Небольшая задержка усложняет перебор пароля.
       await new Promise((r) => setTimeout(r, 700))

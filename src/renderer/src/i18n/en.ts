@@ -13,6 +13,7 @@ const en: Dictionary = {
   },
   connect: {
     tagline: 'Voice, screen and chat for your crew — no cloud',
+    taglineOnline: 'Voice, screen and chat for your crew',
     nickname: 'Your nickname',
     nicknamePlaceholder: 'What should we call you?',
     tabJoin: 'Join',
@@ -20,6 +21,12 @@ const en: Dictionary = {
     address: 'Host IP address',
     addressPlaceholder: 'e.g. 26.12.34.56 or 26.12.34.56:7777',
     addressHint: 'Ask the host for the IP — it is shown on their «Host» tab.',
+    addressOnline: 'Server address',
+    addressPlaceholderOnline: 'e.g. 203.0.113.10 or zvon.example.com',
+    addressHintOnline: 'IP address or domain of the server — ask the server owner.',
+    iAmAdmin: 'I am the server admin',
+    adminToken: 'Admin key',
+    adminTokenPlaceholder: 'ZVON_ADMIN_TOKEN from the server settings',
     password: 'Server password',
     passwordPlaceholder: 'if the host set one',
     rememberPassword: 'Remember password',
@@ -29,7 +36,8 @@ const en: Dictionary = {
     recentEmpty: 'Servers you joined will appear here.',
     forget: 'Remove from list',
     errNickname: 'Enter a nickname',
-    errAddress: 'Enter the host IP (and port if it is not 7777)'
+    errAddress: 'Enter the host IP (and port if it is not 7777)',
+    errAddressOnline: 'Enter the server address (and port if it is not 7777)'
   },
   host: {
     serverName: 'Server name',

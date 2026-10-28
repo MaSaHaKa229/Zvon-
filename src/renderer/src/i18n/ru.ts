@@ -11,6 +11,7 @@ const ru = {
   },
   connect: {
     tagline: 'Голос, экран и чат для своей компании — без облаков',
+    taglineOnline: 'Голос, экран и чат для своей компании',
     nickname: 'Ваш ник',
     nicknamePlaceholder: 'Как вас называть?',
     tabJoin: 'Подключиться',
@@ -18,6 +19,12 @@ const ru = {
     address: 'IP-адрес хоста',
     addressPlaceholder: 'например, 26.12.34.56 или 26.12.34.56:7777',
     addressHint: 'Узнайте IP у хоста — он показан у него на вкладке «Стать хостом».',
+    addressOnline: 'Адрес сервера',
+    addressPlaceholderOnline: 'например, 203.0.113.10 или zvon.example.ru',
+    addressHintOnline: 'IP-адрес или домен сервера — узнайте у владельца сервера.',
+    iAmAdmin: 'Я администратор сервера',
+    adminToken: 'Ключ администратора',
+    adminTokenPlaceholder: 'ZVON_ADMIN_TOKEN из настроек сервера',
     password: 'Пароль сервера',
     passwordPlaceholder: 'если хост его задал',
     rememberPassword: 'Запомнить пароль',
@@ -27,7 +34,8 @@ const ru = {
     recentEmpty: 'Здесь появятся серверы, к которым вы подключались.',
     forget: 'Убрать из списка',
     errNickname: 'Введите ник',
-    errAddress: 'Введите IP-адрес хоста (и порт, если он не 7777)'
+    errAddress: 'Введите IP-адрес хоста (и порт, если он не 7777)',
+    errAddressOnline: 'Введите адрес сервера (и порт, если он не 7777)'
   },
   host: {
     serverName: 'Название сервера',

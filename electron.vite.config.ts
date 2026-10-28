@@ -4,6 +4,15 @@ import react from '@vitejs/plugin-react'
 
 const shared = { '@shared': resolve(__dirname, 'src/shared') }
 
+/**
+ * Вариант сборки (переменные окружения при `npm run build` / `npm run dist`):
+ * - ZVON_EDITION=online — версия для сервера в интернете (VPS): без вкладки «Стать хостом»;
+ *   lan (по умолчанию) — полная версия с хостингом на своём компьютере.
+ * - ZVON_SERVER=адрес[:порт] — сервер, подставляемый в поле адреса при первом запуске.
+ */
+const edition = process.env.ZVON_EDITION === 'online' ? 'online' : 'lan'
+const defaultServer = (process.env.ZVON_SERVER ?? '').trim()
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
@@ -29,6 +38,10 @@ export default defineConfig({
         '@renderer': resolve(__dirname, 'src/renderer/src')
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    define: {
+      __ZVON_EDITION__: JSON.stringify(edition),
+      __ZVON_DEFAULT_SERVER__: JSON.stringify(defaultServer)
+    }
   }
 })

@@ -46,6 +46,8 @@ export interface ConnTarget {
   host: string
   port: number
   password: string
+  /** Ключ администратора сервера (для сервера на VPS); пусто — обычный вход. */
+  adminToken?: string
   remember: boolean
 }
 

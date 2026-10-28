@@ -1,0 +1,14 @@
+# Сервер Zvon на VPS. Настройки — в файле .env рядом (скопируйте из .env.example).
+services:
+  zvon:
+    build: ..
+    image: zvon-server
+    container_name: zvon
+    restart: unless-stopped
+    # Сеть хоста: голосу нужен UDP-порт без лишних преобразований адресов,
+    # а серверу — настоящие IP клиентов (для защиты от перебора пароля).
+    network_mode: host
+    env_file: .env
+    volumes:
+      # База сообщений, файлы, сертификат и логи. Не удаляйте — иначе у всех «сменится сертификат».
+      - ./data:/data
