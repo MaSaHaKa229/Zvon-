@@ -3,7 +3,7 @@
  * пропускает их через нейросеть по 480 сэмплов (10 мс при 48 кГц) и отдаёт в MediaStreamTrackGenerator.
  * Используется синхронная сборка @jitsi/rnnoise-wasm — WASM встроен в JS, отдельные файлы не нужны.
  */
-import { createRNNWasmModuleSync } from '@jitsi/rnnoise-wasm'
+import createRNNWasmModuleSync from '@jitsi/rnnoise-wasm/dist/rnnoise-sync.js'
 
 interface RnnoiseModule {
   _malloc(bytes: number): number
