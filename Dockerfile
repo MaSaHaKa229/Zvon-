@@ -4,8 +4,12 @@
 # Запуск:  cd deploy && docker compose up -d
 
 # 1. Зависимости сервера: нативные модули собираются под обычный Node.js (не под Electron).
-#    В полном образе node:22-bookworm уже есть python3, make и g++ на случай сборки из исходников.
+#    Готовый mediasoup-worker подходит не для всех систем — тогда mediasoup собирает его
+#    из исходников (5–10 минут), для этого нужны python3-pip, make и g++.
 FROM node:22-bookworm AS deps
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3-pip \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 # --ignore-scripts: не запускать postinstall приложения (он пересобирает модули под Electron).
