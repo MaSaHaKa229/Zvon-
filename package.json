@@ -12,7 +12,8 @@
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && npm run build:web",
+    "build:web": "vite build -c vite.web.config.ts",
     "start": "electron-vite preview",
     "app": "electron .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",

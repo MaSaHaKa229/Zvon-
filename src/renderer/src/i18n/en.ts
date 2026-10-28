@@ -169,6 +169,7 @@ const en: Dictionary = {
   },
   picker: {
     title: 'Share your screen',
+    webHint: 'After you press Go live, the browser will ask you to pick a screen, window or tab. To share sound, tick «Share audio» there.',
     screens: 'Screens',
     windows: 'Windows',
     refresh: 'Refresh',

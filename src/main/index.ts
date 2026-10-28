@@ -304,7 +304,10 @@ function run(): void {
       try {
         const { h: hostName, p: port } = assertHostPort(h, p)
         const res = await probeServer(hostName, port)
-        return { ok: true, fingerprint: res.fingerprint, trust: store.trustState(hostName, port, res.fingerprint), health: res.health }
+        // Публичный сертификат (домен с Let's Encrypt) проверен цепочкой — отпечаток сверять не нужно,
+        // он меняется при каждом продлении.
+        const trust = res.publiclyTrusted ? 'trusted' : store.trustState(hostName, port, res.fingerprint)
+        return { ok: true, fingerprint: res.fingerprint, trust, health: res.health }
       } catch (err) {
         log.warn('Проверка сервера не удалась', (err as Error).message)
         return { ok: false, error: (err as Error).message }

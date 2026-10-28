@@ -194,6 +194,17 @@ async function main() {
     ok(h.body.app === 'zvon' && h.body.requiresPassword === true, 'health отвечает и требует пароль')
     ok(h.fingerprint === info.fingerprint, 'отпечаток сертификата совпадает с объявленным')
 
+    console.log('\nВеб-версия')
+    const page = await http('GET', '/')
+    ok(page.status === 200 && /text\/html/.test(page.headers['content-type']) && page.body.includes('id="root"'), 'главная страница отдаётся')
+    const script = /src="(\/assets\/[^"]+\.js)"/.exec(page.body.toString())?.[1]
+    const asset = script ? await http('GET', script) : null
+    ok(asset?.status === 200 && /immutable/.test(asset.headers['cache-control']), 'скрипт веб-версии отдаётся с долгим кешем')
+    const deep = await http('GET', '/channel/something')
+    ok(deep.status === 200 && deep.body.includes('id="root"'), 'вложенный адрес открывает приложение')
+    const escape = await http('GET', '/assets/..%2f..%2f..%2fpackage.json')
+    ok(escape.status === 404, 'файлы вне веб-версии недоступны')
+
     console.log('\nВход')
     const intruder = new TestClient('Взломщик')
     await intruder.open()

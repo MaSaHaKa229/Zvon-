@@ -7,6 +7,7 @@ import { updateVoiceSettings } from '../store/voice'
 import { rnnoiseSupported } from '../voice/rnnoise'
 import { playSound } from '../voice/sounds'
 import { Modal } from './Common'
+import { IS_WEB } from '../edition'
 
 interface Devices {
   inputs: MediaDeviceInfo[]
@@ -385,7 +386,7 @@ function AppTab() {
   }
   return (
     <div className="settings">
-      {app && (
+      {app && !IS_WEB && (
         <>
           <label className="checkbox">
             <input

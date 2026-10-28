@@ -22,13 +22,13 @@ RUN npm ci --omit=dev --ignore-scripts \
     node_modules/mediasoup/worker/fuzzer node_modules/mediasoup/worker/out/Release/subprojects \
   && test -x node_modules/mediasoup/worker/out/Release/mediasoup-worker
 
-# 2. Сборка кода (out/main/server.js).
+# 2. Сборка кода: сервер (out/main/server.js) и веб-версия (out/web).
 FROM node:22-bookworm AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY . .
-RUN npx electron-vite build
+RUN npm run build
 
 # 3. Итоговый образ.
 FROM node:22-bookworm-slim
@@ -38,6 +38,7 @@ ENV NODE_ENV=production \
 COPY package.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/out/main ./out/main
+COPY --from=build /app/out/web ./out/web
 # Работаем от root: папка данных монтируется с хоста (./data), и её владелец там — root.
 VOLUME ["/data"]
 # 7777/tcp — чат и файлы; 40000/udp и 40000/tcp — голос и демонстрация экрана.

@@ -5,6 +5,7 @@ import { useApp } from '../store/app'
 import { closeScreenPicker, startScreenShare, updateVoiceSettings } from '../store/voice'
 import { SCREEN_PRESETS, type ScreenQuality } from '../voice/settings'
 import { Modal } from './Common'
+import { IS_WEB } from '../edition'
 
 export function ScreenPicker() {
   const { t } = useTranslation()
@@ -68,9 +69,11 @@ export function ScreenPicker() {
       wide
       footer={
         <>
-          <button className="btn btn-secondary" onClick={() => void load()}>
-            {t('picker.refresh')}
-          </button>
+          {!IS_WEB && (
+            <button className="btn btn-secondary" onClick={() => void load()}>
+              {t('picker.refresh')}
+            </button>
+          )}
           <span className="spacer" />
           <button className="btn btn-secondary" onClick={closeScreenPicker}>
             {t('common.cancel')}
@@ -91,42 +94,48 @@ export function ScreenPicker() {
       )}
       {error && <div className="error-box">{error}</div>}
 
-      <div className="tabs">
-        <button className={tab === 'screen' ? 'tab active' : 'tab'} onClick={() => setTab('screen')}>
-          {t('picker.screens')}
-        </button>
-        <button className={tab === 'window' ? 'tab active' : 'tab'} onClick={() => setTab('window')}>
-          {t('picker.windows')}
-        </button>
-      </div>
-
-      {isWayland && <p className="hint">{t('picker.wayland')}</p>}
-
-      <div className="source-grid">
-        {sources === null ? (
-          <p className="hint">{t('picker.loading')}</p>
-        ) : visible.length === 0 ? (
-          <p className="hint">{t('picker.empty')}</p>
-        ) : (
-          visible.map((s) => (
-            <button
-              key={s.id}
-              className={s.id === selected ? 'source selected' : 'source'}
-              onClick={() => setSelected(s.id)}
-              onDoubleClick={() => {
-                setSelected(s.id)
-                start()
-              }}
-            >
-              {s.thumbnail ? <img src={s.thumbnail} alt="" /> : <div className="source-noprev">{t('picker.noPreview')}</div>}
-              <span className="source-name">
-                {s.icon && <img className="source-icon" src={s.icon} alt="" />}
-                {s.name}
-              </span>
+      {IS_WEB ? (
+        <p className="hint">{t('picker.webHint')}</p>
+      ) : (
+        <>
+          <div className="tabs">
+            <button className={tab === 'screen' ? 'tab active' : 'tab'} onClick={() => setTab('screen')}>
+              {t('picker.screens')}
             </button>
-          ))
-        )}
-      </div>
+            <button className={tab === 'window' ? 'tab active' : 'tab'} onClick={() => setTab('window')}>
+              {t('picker.windows')}
+            </button>
+          </div>
+
+          {isWayland && <p className="hint">{t('picker.wayland')}</p>}
+
+          <div className="source-grid">
+            {sources === null ? (
+              <p className="hint">{t('picker.loading')}</p>
+            ) : visible.length === 0 ? (
+              <p className="hint">{t('picker.empty')}</p>
+            ) : (
+              visible.map((s) => (
+                <button
+                  key={s.id}
+                  className={s.id === selected ? 'source selected' : 'source'}
+                  onClick={() => setSelected(s.id)}
+                  onDoubleClick={() => {
+                    setSelected(s.id)
+                    start()
+                  }}
+                >
+                  {s.thumbnail ? <img src={s.thumbnail} alt="" /> : <div className="source-noprev">{t('picker.noPreview')}</div>}
+                  <span className="source-name">
+                    {s.icon && <img className="source-icon" src={s.icon} alt="" />}
+                    {s.name}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
 
       <div className="picker-options">
         <label className="field">

@@ -183,7 +183,12 @@ export class Hub {
       ws.close(CloseCode.ServerShutdown, 'shutting down')
       return
     }
-    const remote = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
+    let remote = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
+    // За обратным прокси на этой же машине настоящий адрес клиента — в X-Forwarded-For.
+    const forwarded = req.headers['x-forwarded-for']
+    if (this.cfg.trustProxy && (remote === '127.0.0.1' || remote === '::1') && typeof forwarded === 'string') {
+      remote = forwarded.split(',')[0].trim().replace(/^::ffff:/, '') || remote
+    }
     const s = new ClientSession(ws, this.nextConnId++, remote, this.log)
     this.sessions.add(s)
     this.log.info(`Новое подключение ${s.label}`)

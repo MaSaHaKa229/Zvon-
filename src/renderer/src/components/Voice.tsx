@@ -31,6 +31,7 @@ import {
 } from './Icons'
 import { ScreenPicker } from './ScreenPicker'
 import { VoiceSettingsDialog } from './VoiceSettings'
+import { CAN_SHARE_SCREEN } from '../edition'
 
 const EMPTY_LEVELS: Record<string, number> = {}
 
@@ -179,13 +180,15 @@ export function VoicePanel() {
           <button className={camera ? 'panel-btn on' : 'panel-btn'} title={camera ? t('stage.cameraOff') : t('stage.cameraOn')} onClick={() => void toggleCamera()}>
             {camera ? <CameraIcon width={18} height={18} /> : <CameraOffIcon width={18} height={18} />}
           </button>
-          <button
-            className={screen ? 'panel-btn on' : 'panel-btn'}
-            title={screen ? t('stage.stopShare') : t('stage.shareScreen')}
-            onClick={() => (screen ? void stopScreenShare() : openScreenPicker())}
-          >
-            {screen ? <ScreenOffIcon width={18} height={18} /> : <ScreenIcon width={18} height={18} />}
-          </button>
+          {CAN_SHARE_SCREEN && (
+            <button
+              className={screen ? 'panel-btn on' : 'panel-btn'}
+              title={screen ? t('stage.stopShare') : t('stage.shareScreen')}
+              onClick={() => (screen ? void stopScreenShare() : openScreenPicker())}
+            >
+              {screen ? <ScreenOffIcon width={18} height={18} /> : <ScreenIcon width={18} height={18} />}
+            </button>
+          )}
           <button className="panel-btn" title={t('stage.openStage')} onClick={showVoiceView}>
             <FocusIcon width={18} height={18} />
           </button>

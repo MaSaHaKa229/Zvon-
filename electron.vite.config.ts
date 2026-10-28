@@ -41,7 +41,9 @@ export default defineConfig({
     plugins: [react()],
     define: {
       __ZVON_EDITION__: JSON.stringify(edition),
-      __ZVON_DEFAULT_SERVER__: JSON.stringify(defaultServer)
+      __ZVON_DEFAULT_SERVER__: JSON.stringify(defaultServer),
+      __ZVON_WEB__: 'false',
+      __ZVON_VERSION__: JSON.stringify(process.env.npm_package_version ?? '')
     }
   }
 })

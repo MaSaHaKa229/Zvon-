@@ -1,0 +1,11 @@
+# Веб-версия Zvon по HTTPS. Caddy сам получает и продлевает бесплатный сертификат Let's Encrypt
+# для домена из ZVON_DOMAIN и передаёт запросы серверу Zvon на этой же машине.
+{$ZVON_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy https://127.0.0.1:{$ZVON_PORT:7777} {
+		# У сервера Zvon самоподписанный сертификат — внутри одной машины это нормально.
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}

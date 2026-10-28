@@ -23,6 +23,10 @@ export interface ServerConfig {
    * 'auto' — узнать через интернет при запуске; пусто — объявлять адреса сетевых карт.
    */
   announcedIp: string
+  /** Сервер за обратным прокси (Caddy) на этой же машине: IP клиента берётся из X-Forwarded-For. */
+  trustProxy: boolean
+  /** Каталог веб-версии; пусто — out/web рядом со сборкой, если он есть. */
+  webDir: string
   /** Максимальный размер одного файла, МБ. */
   maxUploadMb: number
 }
@@ -83,7 +87,9 @@ export function normalizeConfig(input: Partial<ServerConfig> & { dataDir: string
     rtcPort,
     maxUploadMb,
     rtcIps: (input.rtcIps ?? []).filter((ip) => IPV4.test(ip)),
-    announcedIp: normalizeAnnouncedIp(input.announcedIp)
+    announcedIp: normalizeAnnouncedIp(input.announcedIp),
+    trustProxy: Boolean(input.trustProxy),
+    webDir: input.webDir?.trim() ?? ''
   }
 }
 
@@ -115,6 +121,8 @@ export function configFromArgv(
     maxUploadMb: get('--max-upload-mb') ? Number(get('--max-upload-mb')) : undefined,
     rtcIps: get('--rtc-ips')?.split(',').map((s) => s.trim()).filter(Boolean),
     announcedIp: get('--announced-ip'),
+    trustProxy: ['1', 'true', 'yes'].includes((get('--trust-proxy') ?? '').toLowerCase()),
+    webDir: get('--web-dir'),
     adminToken: get('--admin-token')
   }
 }

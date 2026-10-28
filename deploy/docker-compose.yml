@@ -9,6 +9,21 @@ services:
     # а серверу — настоящие IP клиентов (для защиты от перебора пароля).
     network_mode: host
     env_file: .env
+    environment:
+      # Веб-версия открывается через Caddy: настоящий IP клиента — в X-Forwarded-For.
+      ZVON_TRUST_PROXY: '1'
     volumes:
       # База сообщений, файлы, сертификат и логи. Не удаляйте — иначе у всех «сменится сертификат».
       - ./data:/data
+
+  # HTTPS для веб-версии (браузеры дают доступ к микрофону только по HTTPS с настоящим сертификатом).
+  caddy:
+    image: caddy:2
+    container_name: zvon-caddy
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config

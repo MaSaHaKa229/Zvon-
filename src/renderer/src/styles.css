@@ -2519,3 +2519,143 @@ input[type='range'] {
   font-weight: 600;
   margin: 6px 0;
 }
+
+/* ---------- телефон и узкие окна ---------- */
+
+.mobile-bar,
+.drawer-backdrop {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    /* Высота без адресной строки мобильного браузера. */
+    height: 100dvh;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .layout > .chat,
+  .layout > .stage {
+    grid-row: 2;
+    min-height: 0;
+  }
+
+  .mobile-bar {
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 48px;
+    padding: 0 6px;
+    padding-top: env(safe-area-inset-top);
+    box-sizing: content-box;
+    background: var(--bg-2);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+  }
+
+  .mobile-bar .icon-btn {
+    position: relative;
+    padding: 10px;
+  }
+
+  .mobile-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+  }
+
+  .mobile-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: var(--text-strong);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-title svg {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+  }
+
+  /* Заголовок канала уже в мобильной панели. */
+  .chat-header {
+    display: none;
+  }
+
+  .sidebar,
+  .layout .members {
+    display: flex;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: min(86vw, 320px);
+    z-index: 60;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .sidebar {
+    left: 0;
+    transform: translateX(-105%);
+  }
+
+  .layout .members {
+    right: 0;
+    flex-direction: column;
+    overflow-y: auto;
+    transform: translateX(105%);
+  }
+
+  .drawer-channels .sidebar,
+  .drawer-members .members {
+    transform: none;
+  }
+
+  .drawer-channels .drawer-backdrop,
+  .drawer-members .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  /* iOS увеличивает страницу при фокусе на поле со шрифтом меньше 16px. */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  .modal-backdrop {
+    place-items: end stretch;
+  }
+
+  .modal {
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: 12px 12px 0 0;
+  }
+
+  .connect-screen {
+    padding: 24px 12px;
+  }
+}

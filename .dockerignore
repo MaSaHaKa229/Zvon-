@@ -7,3 +7,5 @@ deploy/.env
 .git
 *.log
 *.tsbuildinfo
+deploy/caddy-data
+deploy/caddy-config

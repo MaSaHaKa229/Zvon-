@@ -19,6 +19,7 @@ import { ZvonDb } from './db'
 import { Hub } from './hub'
 import { listAddresses } from './interfaces'
 import { FileService } from './files'
+import { findWebDir, serveWeb } from './web'
 import { SfuService } from './sfu'
 import { createLogger, type Logger } from './logger'
 
@@ -47,7 +48,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload)
 }
 
-function makeRequestHandler(cfg: ServerConfig, hub: () => Hub | null, files: FileService, log: Logger) {
+function makeRequestHandler(cfg: ServerConfig, hub: () => Hub | null, files: FileService, log: Logger, webDir: string | null) {
   return (req: IncomingMessage, res: ServerResponse): void => {
     try {
       const url = new URL(req.url ?? '/', 'https://zvon.local')
@@ -73,6 +74,7 @@ function makeRequestHandler(cfg: ServerConfig, hub: () => Hub | null, files: Fil
         })
         return
       }
+      if (webDir && serveWeb(req, res, url, webDir)) return
       sendJson(res, 404, { error: 'not_found' })
     } catch (err) {
       log.error('Ошибка HTTP-обработчика', err)
@@ -122,7 +124,9 @@ export async function startServer(
     await sfu.start()
     const tls = loadOrCreateTls(cfg.dataDir, log.child('tls'))
     log.info(`Отпечаток сертификата (сверьте с окном доверия у клиентов): ${tls.fingerprint}`)
-    https = createServer({ key: tls.key, cert: tls.cert }, makeRequestHandler(cfg, () => hub, files, log.child('http')))
+    const webDir = findWebDir(cfg.webDir)
+    if (webDir) log.info(`Веб-версия: ${webDir}`)
+    https = createServer({ key: tls.key, cert: tls.cert }, makeRequestHandler(cfg, () => hub, files, log.child('http'), webDir))
     https.on('clientError', (err, socket) => {
       log.debug('Ошибка TLS-клиента', (err as Error).message)
       socket.destroy()

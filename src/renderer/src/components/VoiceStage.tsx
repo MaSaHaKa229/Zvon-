@@ -34,6 +34,7 @@ import {
   VolumeIcon
 } from './Icons'
 import { ScreenPicker } from './ScreenPicker'
+import { CAN_SHARE_SCREEN } from '../edition'
 
 interface TileModel {
   key: string
@@ -334,14 +335,16 @@ export function StageControls() {
       >
         {camera ? <CameraIcon /> : <CameraOffIcon />}
       </button>
-      <button
-        className={screen ? 'round-btn on' : 'round-btn'}
-        disabled={!connected}
-        title={screen ? t('stage.stopShare') : t('stage.shareScreen')}
-        onClick={() => (screen ? void stopScreenShare() : openScreenPicker())}
-      >
-        {screen ? <ScreenOffIcon /> : <ScreenIcon />}
-      </button>
+      {CAN_SHARE_SCREEN && (
+        <button
+          className={screen ? 'round-btn on' : 'round-btn'}
+          disabled={!connected}
+          title={screen ? t('stage.stopShare') : t('stage.shareScreen')}
+          onClick={() => (screen ? void stopScreenShare() : openScreenPicker())}
+        >
+          {screen ? <ScreenOffIcon /> : <ScreenIcon />}
+        </button>
+      )}
       <button className="round-btn leave" title={t('voice.leave')} onClick={() => void leaveVoice()}>
         <PhoneOffIcon />
       </button>

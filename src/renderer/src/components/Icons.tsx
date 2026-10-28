@@ -196,3 +196,15 @@ export const PlusCircleIcon = (p: P) => (
     <path d="M12 8v8M8 12h8" />
   </svg>
 )
+export const MenuIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+)
+export const UsersIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+)

@@ -12,3 +12,5 @@ Thumbs.db
 # Сервер на VPS: настройки и данные
 deploy/.env
 deploy/data/
+deploy/caddy-data/
+deploy/caddy-config/

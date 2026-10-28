@@ -1,0 +1,10 @@
+{
+  "name": "Zvon",
+  "short_name": "Zvon",
+  "description": "Голос, экран и чат для своей компании",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1f22",
+  "theme_color": "#1e1f22",
+  "icons": [{ "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

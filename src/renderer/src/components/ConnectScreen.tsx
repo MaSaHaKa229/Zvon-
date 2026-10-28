@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DEFAULT_PORT, DEFAULT_RTC_PORT, LIMITS } from '../../../shared/constants'
 import { parseHostInput } from '../../../shared/net'
-import { DEFAULT_SERVER, ONLINE_EDITION } from '../edition'
+import { DEFAULT_SERVER, IS_WEB, ONLINE_EDITION, webTarget } from '../edition'
 import { useApp } from '../store/app'
 import {
   beginConnect,
@@ -103,7 +103,7 @@ function JoinForm() {
 
   const submit = (e?: FormEvent): void => {
     e?.preventDefault()
-    const parsed = parseHostInput(address, DEFAULT_PORT)
+    const parsed = IS_WEB ? webTarget() : parseHostInput(address, DEFAULT_PORT)
     if (!parsed) {
       setLocalError(t(ONLINE_EDITION ? 'connect.errAddressOnline' : 'connect.errAddress'))
       return
@@ -114,16 +114,18 @@ function JoinForm() {
 
   return (
     <form className="form" onSubmit={submit}>
-      <label className="field">
-        <span className="field-label">{t(ONLINE_EDITION ? 'connect.addressOnline' : 'connect.address')}</span>
-        <input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder={t(ONLINE_EDITION ? 'connect.addressPlaceholderOnline' : 'connect.addressPlaceholder')}
-          spellCheck={false}
-        />
-        <span className="hint">{t(ONLINE_EDITION ? 'connect.addressHintOnline' : 'connect.addressHint')}</span>
-      </label>
+      {!IS_WEB && (
+        <label className="field">
+          <span className="field-label">{t(ONLINE_EDITION ? 'connect.addressOnline' : 'connect.address')}</span>
+          <input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder={t(ONLINE_EDITION ? 'connect.addressPlaceholderOnline' : 'connect.addressPlaceholder')}
+            spellCheck={false}
+          />
+          <span className="hint">{t(ONLINE_EDITION ? 'connect.addressHintOnline' : 'connect.addressHint')}</span>
+        </label>
+      )}
       <label className="field">
         <span className="field-label">{t('connect.password')}</span>
         <input
@@ -160,53 +162,55 @@ function JoinForm() {
         {connecting ? t('connect.joining') : t('connect.join')}
       </button>
 
-      <div className="recent">
-        <div className="field-label">{t('connect.recent')}</div>
-        {recent.length === 0 ? (
-          <p className="hint">{t('connect.recentEmpty')}</p>
-        ) : (
-          <ul>
-            {recent.map((r) => (
-              <li key={`${r.host}:${r.port}`}>
-                <button
-                  type="button"
-                  className="recent-item"
-                  disabled={connecting}
-                  onClick={() => {
-                    setAddress(r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`)
-                    setPassword(r.password ?? '')
-                    setAdminToken(r.adminToken ?? '')
-                    setShowAdmin(Boolean(r.adminToken))
-                    void beginConnect({
-                      host: r.host,
-                      port: r.port,
-                      password: r.password ?? '',
-                      adminToken: r.adminToken ?? '',
-                      remember: Boolean(r.password || r.adminToken)
-                    })
-                  }}
-                >
-                  <ServerIcon width={18} height={18} />
-                  <span className="recent-name">{r.name}</span>
-                  <span className="recent-addr">
-                    {r.host}:{r.port}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  title={t('connect.forget')}
-                  onClick={() => {
-                    void window.zvon.forgetServer(r.host, r.port).then((recentServers) => useApp.setState({ recentServers }))
-                  }}
-                >
-                  <CloseIcon width={16} height={16} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {!IS_WEB && (
+        <div className="recent">
+          <div className="field-label">{t('connect.recent')}</div>
+          {recent.length === 0 ? (
+            <p className="hint">{t('connect.recentEmpty')}</p>
+          ) : (
+            <ul>
+              {recent.map((r) => (
+                <li key={`${r.host}:${r.port}`}>
+                  <button
+                    type="button"
+                    className="recent-item"
+                    disabled={connecting}
+                    onClick={() => {
+                      setAddress(r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`)
+                      setPassword(r.password ?? '')
+                      setAdminToken(r.adminToken ?? '')
+                      setShowAdmin(Boolean(r.adminToken))
+                      void beginConnect({
+                        host: r.host,
+                        port: r.port,
+                        password: r.password ?? '',
+                        adminToken: r.adminToken ?? '',
+                        remember: Boolean(r.password || r.adminToken)
+                      })
+                    }}
+                  >
+                    <ServerIcon width={18} height={18} />
+                    <span className="recent-name">{r.name}</span>
+                    <span className="recent-addr">
+                      {r.host}:{r.port}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    title={t('connect.forget')}
+                    onClick={() => {
+                      void window.zvon.forgetServer(r.host, r.port).then((recentServers) => useApp.setState({ recentServers }))
+                    }}
+                  >
+                    <CloseIcon width={16} height={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </form>
   )
 }

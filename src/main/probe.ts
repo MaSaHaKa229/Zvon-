@@ -11,6 +11,8 @@ const PROBE_TIMEOUT_MS = 6_000
 
 export interface RawProbe {
   fingerprint: string
+  /** Сертификат выдан публичным центром для этого имени (например, Let's Encrypt у сервера на VPS). */
+  publiclyTrusted: boolean
   health: ServerHealth
 }
 
@@ -38,6 +40,7 @@ function humanError(err: NodeJS.ErrnoException, host: string, port: number): str
 export function probeServer(host: string, port: number): Promise<RawProbe> {
   return new Promise((resolve, reject) => {
     let fingerprint: string | null = null
+    let publiclyTrusted = false
     let finished = false
     const done = (fn: () => void): void => {
       if (finished) return
@@ -60,6 +63,7 @@ export function probeServer(host: string, port: number): Promise<RawProbe> {
       (res) => {
         const sock = res.socket as TLSSocket
         fingerprint = sock.getPeerX509Certificate?.()?.fingerprint256 ?? sock.getPeerCertificate()?.fingerprint256 ?? null
+        publiclyTrusted = sock.authorized === true
         let body = ''
         res.setEncoding('utf8')
         res.on('data', (chunk: string) => {
@@ -91,7 +95,7 @@ export function probeServer(host: string, port: number): Promise<RawProbe> {
               )
               return
             }
-            resolve({ fingerprint, health })
+            resolve({ fingerprint, publiclyTrusted, health })
           })
         )
       }

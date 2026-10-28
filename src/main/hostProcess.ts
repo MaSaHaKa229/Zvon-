@@ -90,6 +90,8 @@ export class HostController extends EventEmitter {
       rtcPort: settings.rtcPort,
       rtcIps: [],
       announcedIp: '',
+      trustProxy: false,
+      webDir: '',
       maxUploadMb: settings.maxUploadMb
     }
 
