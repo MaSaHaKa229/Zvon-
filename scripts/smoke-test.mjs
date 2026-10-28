@@ -75,7 +75,8 @@ function health() {
   })
 }
 
-function http(method, path, { token, body, headers = {} } = {}) {
+/** headersOnly: тело не отправляется, ждём ответа на одни заголовки (сервер отклоняет по Content-Length). */
+function http(method, path, { token, body, headers = {}, headersOnly = false } = {}) {
   return new Promise((resolve, reject) => {
     const h = { ...headers }
     if (token) h.Authorization = `Bearer ${token}`
@@ -95,6 +96,12 @@ function http(method, path, { token, body, headers = {} } = {}) {
       })
     })
     req.on('error', reject)
+    if (headersOnly) {
+      // Если писать тело, сервер может закрыть сокет раньше, чем клиент прочитает 413 (ECONNRESET).
+      req.on('response', (res) => res.on('end', () => req.destroy()))
+      req.flushHeaders()
+      return
+    }
     if (body) req.write(body)
     req.end()
   })
@@ -301,7 +308,7 @@ async function main() {
     const imgId = up.json.file.id
     const thumb = await http('PUT', `/upload?name=thumb.webp&type=image/webp&thumbOf=${imgId}`, { token: aTok, body: Buffer.alloc(500, 1) })
     ok(thumb.status === 200, 'миниатюра загружена')
-    const tooBig = await http('PUT', '/upload?name=big.bin&type=application/octet-stream', { token: aTok, body: Buffer.alloc(1024 * 1024 + 10) })
+    const tooBig = await http('PUT', '/upload?name=big.bin&type=application/octet-stream', { token: aTok, body: Buffer.alloc(1024 * 1024 + 10), headersOnly: true })
     ok(tooBig.status === 413, 'файл больше лимита отклонён (413)')
     const svg = await http('PUT', '/upload?name=x.svg&type=image/svg+xml', { token: aTok, body: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') })
     ok(svg.status === 200 && svg.json.file.kind === 'file', 'SVG сохраняется как обычный файл (без показа)')
