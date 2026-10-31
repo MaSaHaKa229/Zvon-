@@ -80,6 +80,11 @@ function context(): AudioContext | null {
   }
 }
 
+/** Возобновить звуки после того, как браузер их приостановил (например, после видео на телефоне). */
+export function resumeSounds(): void {
+  if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') void ctx.resume().catch(() => undefined)
+}
+
 /** Звуки идут в то же устройство вывода, что и голос. */
 export function setSoundsOutput(deviceId: string): void {
   if (deviceId === sinkId) return

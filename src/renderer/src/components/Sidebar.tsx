@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { LIMITS } from '../../../shared/constants'
 import { useApp } from '../store/app'
 import { makeAvatar } from '../lib/files'
-import { disconnect, selectChannel, updateProfile } from '../store/session'
+import { changePassword, disconnect, selectChannel, updateProfile } from '../store/session'
 import { Avatar, Modal } from './Common'
 import { HostPanel } from './HostPanel'
 import { HostShare } from './HostShare'
@@ -156,6 +156,7 @@ function UserPanel() {
 
 function ProfileDialog({ current, onClose }: { current: string; onClose: () => void }) {
   const { t } = useTranslation()
+  const account = useApp((s) => s.account)
   const me = useApp((s) => s.me)
   const [value, setValue] = useState(current)
   const [avatar, setAvatar] = useState<{ blob: Blob; dataUrl: string } | null | undefined>(undefined)
@@ -224,7 +225,7 @@ function ProfileDialog({ current, onClose }: { current: string; onClose: () => v
               </button>
             )}
           </div>
-          <p className="hint">{t('profile.hint')}</p>
+          <p className="hint">{t(account ? 'profile.hintAccount' : 'profile.hint')}</p>
           <input
             ref={input}
             type="file"
@@ -250,6 +251,74 @@ function ProfileDialog({ current, onClose }: { current: string; onClose: () => v
         />
       </label>
       {error && <div className="error-box">{error}</div>}
+      <PasswordSection />
     </Modal>
+  )
+}
+
+/** Смена пароля (только на сервере с аккаунтами). */
+function PasswordSection() {
+  const { t } = useTranslation()
+  const account = useApp((s) => s.account)
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [repeat, setRepeat] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  if (!account) return null
+
+  const submit = async (): Promise<void> => {
+    if (next.length < LIMITS.accountPasswordMin) return setMsg({ ok: false, text: t('profile.passwordShort', { n: LIMITS.accountPasswordMin }) })
+    if (next !== repeat) return setMsg({ ok: false, text: t('profile.passwordMismatch') })
+    setBusy(true)
+    const err = await changePassword(current, next)
+    setBusy(false)
+    if (err) setMsg({ ok: false, text: err })
+    else {
+      setMsg({ ok: true, text: t('profile.passwordChanged') })
+      setCurrent('')
+      setNext('')
+      setRepeat('')
+    }
+  }
+
+  return (
+    <div className="password-section">
+      <div className="field-label">
+        {t('profile.login')}: <b className="account-login">{account.login}</b>
+      </div>
+      {!open ? (
+        <button className="btn btn-small btn-secondary" onClick={() => setOpen(true)}>
+          {t('profile.changePassword')}
+        </button>
+      ) : (
+        <form
+          className="form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void submit()
+          }}
+        >
+          <input type="text" autoComplete="username" value={account.login} readOnly hidden />
+          <label className="field">
+            <span className="field-label">{t('profile.currentPassword')}</span>
+            <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('profile.newPassword')}</span>
+            <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('profile.repeatPassword')}</span>
+            <input type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+          </label>
+          {msg && <div className={msg.ok ? 'success-box' : 'error-box'}>{msg.text}</div>}
+          <button className="btn btn-small btn-primary" type="submit" disabled={busy || !current || !next}>
+            {t('profile.changePassword')}
+          </button>
+        </form>
+      )}
+    </div>
   )
 }

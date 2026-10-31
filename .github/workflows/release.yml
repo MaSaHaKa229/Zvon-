@@ -128,13 +128,13 @@ jobs:
 
       - name: Запуск как на VPS (настройки из переменных окружения)
         run: |
-          docker run -d --name zvon --network host -e ZVON_PASSWORD=ci -e ZVON_ANNOUNCED_IP=auto -v "$RUNNER_TEMP/zvon-data:/data" zvon-server
+          docker run -d --name zvon --network host -e ZVON_ADMIN_LOGIN=admin -e ZVON_ADMIN_PASSWORD=ci-password -e ZVON_ANNOUNCED_IP=auto -v "$RUNNER_TEMP/zvon-data:/data" zvon-server
           for i in $(seq 1 30); do
             if curl -skf https://127.0.0.1:7777/health; then echo; break; fi
             sleep 1
           done
           docker logs zvon
-          curl -skf https://127.0.0.1:7777/health | grep -q '"requiresPassword":true'
+          curl -skf https://127.0.0.1:7777/health | grep -q '"accounts":true'
           docker logs zvon 2>&1 | grep -q 'Медиа слушает порт 40000'
           curl -skf https://127.0.0.1:7777/ | grep -q 'id="root"'
           docker rm -f zvon

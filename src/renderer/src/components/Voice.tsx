@@ -101,6 +101,7 @@ function VoiceMember({ state, speaking }: { state: VoiceState; speaking: boolean
           <Avatar id={state.userId} nickname={name} size={24} />
         </span>
         <span className={silenced ? 'voice-name silenced' : 'voice-name'}>{name}</span>
+        {state.streaming && <span className="live-badge">{t('stage.live')}</span>}
         {state.deafened ? (
           <HeadphonesOffIcon width={14} height={14} className="voice-flag" />
         ) : state.muted ? (

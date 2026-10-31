@@ -39,16 +39,19 @@ export function ConnectScreen() {
           </div>
         </div>
 
-        <label className="field">
-          <span className="field-label">{t('connect.nickname')}</span>
-          <input
-            value={nickname}
-            maxLength={LIMITS.nicknameLength}
-            placeholder={t('connect.nicknamePlaceholder')}
-            onChange={(e) => setNicknameDraft(e.target.value.replace(/@/g, ''))}
-            autoFocus={!nickname}
-          />
-        </label>
+        {/* В онлайн-версии вход по аккаунту: ник задаётся в профиле на сервере. */}
+        {!ONLINE_EDITION && (
+          <label className="field">
+            <span className="field-label">{t('connect.nickname')}</span>
+            <input
+              value={nickname}
+              maxLength={LIMITS.nicknameLength}
+              placeholder={t('connect.nicknamePlaceholder')}
+              onChange={(e) => setNicknameDraft(e.target.value.replace(/@/g, ''))}
+              autoFocus={!nickname}
+            />
+          </label>
+        )}
 
         {ONLINE_EDITION ? (
           <JoinForm />
@@ -96,6 +99,7 @@ function JoinForm() {
     return r ? (r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`) : DEFAULT_SERVER
   })
   const [password, setPassword] = useState(() => recent[0]?.password ?? '')
+  const [login, setLogin] = useState(() => recent[0]?.login ?? '')
   const [adminToken, setAdminToken] = useState(() => recent[0]?.adminToken ?? '')
   const [showAdmin, setShowAdmin] = useState(() => Boolean(recent[0]?.adminToken))
   const [remember, setRemember] = useState(true)
@@ -109,7 +113,14 @@ function JoinForm() {
       return
     }
     setLocalError(null)
-    void beginConnect({ host: parsed.host, port: parsed.port, password, adminToken: showAdmin ? adminToken.trim() : '', remember })
+    void beginConnect({
+      host: parsed.host,
+      port: parsed.port,
+      password,
+      adminToken: showAdmin ? adminToken.trim() : '',
+      login: ONLINE_EDITION ? login.trim() : undefined,
+      remember
+    })
   }
 
   return (
@@ -126,25 +137,42 @@ function JoinForm() {
           <span className="hint">{t(ONLINE_EDITION ? 'connect.addressHintOnline' : 'connect.addressHint')}</span>
         </label>
       )}
+      {ONLINE_EDITION && (
+        <label className="field">
+          <span className="field-label">{t('connect.login')}</span>
+          <input
+            value={login}
+            maxLength={64}
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            autoFocus={!login}
+            onChange={(e) => setLogin(e.target.value)}
+          />
+        </label>
+      )}
       <label className="field">
-        <span className="field-label">{t('connect.password')}</span>
+        <span className="field-label">{t(ONLINE_EDITION ? 'connect.accountPassword' : 'connect.password')}</span>
         <input
           type="password"
           value={password}
           maxLength={LIMITS.passwordLength}
+          autoComplete={ONLINE_EDITION ? 'current-password' : undefined}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder={t('connect.passwordPlaceholder')}
+          placeholder={ONLINE_EDITION ? undefined : t('connect.passwordPlaceholder')}
         />
       </label>
       <label className="checkbox">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
         {t('connect.rememberPassword')}
       </label>
-      <label className="checkbox">
-        <input type="checkbox" checked={showAdmin} onChange={(e) => setShowAdmin(e.target.checked)} />
-        {t('connect.iAmAdmin')}
-      </label>
-      {showAdmin && (
+      {!ONLINE_EDITION && (
+        <label className="checkbox">
+          <input type="checkbox" checked={showAdmin} onChange={(e) => setShowAdmin(e.target.checked)} />
+          {t('connect.iAmAdmin')}
+        </label>
+      )}
+      {showAdmin && !ONLINE_EDITION && (
         <label className="field">
           <span className="field-label">{t('connect.adminToken')}</span>
           <input
@@ -179,12 +207,14 @@ function JoinForm() {
                       setAddress(r.port === DEFAULT_PORT ? r.host : `${r.host}:${r.port}`)
                       setPassword(r.password ?? '')
                       setAdminToken(r.adminToken ?? '')
+                    setLogin(r.login ?? '')
                       setShowAdmin(Boolean(r.adminToken))
                       void beginConnect({
                         host: r.host,
                         port: r.port,
                         password: r.password ?? '',
                         adminToken: r.adminToken ?? '',
+                      login: ONLINE_EDITION ? (r.login ?? '') : undefined,
                         remember: Boolean(r.password || r.adminToken)
                       })
                     }}

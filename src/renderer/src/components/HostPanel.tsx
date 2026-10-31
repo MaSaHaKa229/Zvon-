@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LIMITS } from '../../../shared/constants'
-import type { AdminSettings, AdminStats, Channel, ChannelType } from '../../../shared/types'
+import type { AccountInfo, AdminSettings, AdminStats, Channel, ChannelType } from '../../../shared/types'
 import { formatSize } from '../lib/files'
 import { useApp } from '../store/app'
 import { adminRequest } from '../store/session'
@@ -9,7 +9,7 @@ import { Avatar, Modal } from './Common'
 import { FirewallCard } from './Firewall'
 import { HashIcon, TrashIcon, VolumeIcon } from './Icons'
 
-type Tab = 'users' | 'channels' | 'load' | 'settings'
+type Tab = 'accounts' | 'users' | 'channels' | 'load' | 'settings'
 
 const POLL_MS = 2_000
 const HISTORY = 60
@@ -32,7 +32,9 @@ function errText(err: unknown): string {
 /** Панель хоста: участники, каналы, нагрузка SFU, лимиты. Доступна только администратору. */
 export function HostPanel({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
-  const [tab, setTab] = useState<Tab>('users')
+  const hasAccounts = useApp((s) => s.account !== null)
+  const [tab, setTab] = useState<Tab>(hasAccounts ? 'accounts' : 'users')
+  const tabs: Tab[] = hasAccounts ? ['accounts', 'users', 'channels', 'load', 'settings'] : ['users', 'channels', 'load', 'settings']
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [history, setHistory] = useState<Array<{ send: number; recv: number }>>([])
   const [error, setError] = useState<string | null>(null)
@@ -60,18 +62,143 @@ export function HostPanel({ onClose }: { onClose: () => void }) {
   return (
     <Modal title={t('admin.title')} onClose={onClose} wide>
       <div className="tabs">
-        {(['users', 'channels', 'load', 'settings'] as const).map((x) => (
+        {tabs.map((x) => (
           <button key={x} className={tab === x ? 'tab active' : 'tab'} onClick={() => setTab(x)}>
             {t(`admin.tab_${x}`)}
           </button>
         ))}
       </div>
       {error && <div className="error-box">{error}</div>}
+      {tab === 'accounts' && <AccountsTab />}
       {tab === 'users' && <UsersTab stats={stats} />}
       {tab === 'channels' && <ChannelsTab />}
       {tab === 'load' && <LoadTab stats={stats} history={history} />}
       {tab === 'settings' && <SettingsTab stats={stats} />}
     </Modal>
+  )
+}
+
+/** Аккаунты: администратор создаёт логины, сбрасывает пароли, выдаёт права и отключает доступ. */
+function AccountsTab() {
+  const { t } = useTranslation()
+  const myId = useApp((s) => s.me?.id)
+  const [accounts, setAccounts] = useState<AccountInfo[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  const reload = (): void => {
+    adminRequest('account-list', {})
+      .then((r) => setAccounts(r.accounts))
+      .catch((err) => setError(errText(err)))
+  }
+  useEffect(reload, [])
+
+  const run = (p: Promise<unknown>, done?: string): void => {
+    setError(null)
+    setNotice(null)
+    p.then(() => {
+      if (done) setNotice(done)
+      reload()
+    }).catch((err) => setError(errText(err)))
+  }
+
+  const resetPassword = (a: AccountInfo): void => {
+    const next = window.prompt(t('admin.accNewPassword', { login: a.login, n: LIMITS.accountPasswordMin }))
+    if (!next) return
+    run(adminRequest('account-update', { accountId: a.id, password: next }), t('admin.accPasswordSet', { login: a.login }))
+  }
+
+  return (
+    <div className="admin-section">
+      {error && <div className="error-box">{error}</div>}
+      {notice && <div className="success-box">{notice}</div>}
+      <form
+        className="admin-create account-create"
+        onSubmit={(e) => {
+          e.preventDefault()
+          run(
+            adminRequest('account-create', { login: login.trim(), password, isAdmin }).then(() => {
+              setLogin('')
+              setPassword('')
+              setIsAdmin(false)
+            }),
+            t('admin.accCreated', { login: login.trim() })
+          )
+        }}
+      >
+        <input value={login} maxLength={32} placeholder={t('admin.accLogin')} autoCapitalize="none" spellCheck={false} onChange={(e) => setLogin(e.target.value)} />
+        <input value={password} maxLength={LIMITS.passwordLength} placeholder={t('admin.accPassword')} onChange={(e) => setPassword(e.target.value)} />
+        <label className="checkbox">
+          <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} />
+          {t('admin.accIsAdmin')}
+        </label>
+        <button className="btn btn-small btn-primary" type="submit" disabled={!login.trim() || password.length < LIMITS.accountPasswordMin}>
+          {t('admin.create')}
+        </button>
+      </form>
+      <p className="hint">{t('admin.accHint', { n: LIMITS.accountPasswordMin })}</p>
+      {accounts === null ? (
+        <p className="hint">{t('common.loading')}</p>
+      ) : (
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>{t('admin.accLogin')}</th>
+              <th>{t('admin.user')}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map((a) => (
+              <tr key={a.id} className={a.disabled ? 'account-disabled' : ''}>
+                <td className="mono">{a.login}</td>
+                <td>
+                  <span className="admin-user">
+                    <Avatar id={a.id} nickname={a.nickname} size={24} />
+                    {a.nickname}
+                    {a.isAdmin && <span className="tag">{t('members.admin')}</span>}
+                    {a.disabled && <span className="tag tag-muted">{t('admin.accDisabled')}</span>}
+                    {a.online && <span className="dot-live" title={t('admin.accOnline')} />}
+                  </span>
+                </td>
+                <td className="admin-actions">
+                  <button className="btn btn-small btn-secondary" onClick={() => resetPassword(a)}>
+                    {t('admin.accResetPassword')}
+                  </button>
+                  {a.id !== myId && (
+                    <>
+                      <button
+                        className="btn btn-small btn-secondary"
+                        onClick={() => run(adminRequest('account-update', { accountId: a.id, isAdmin: !a.isAdmin }))}
+                      >
+                        {a.isAdmin ? t('admin.accRevokeAdmin') : t('admin.accMakeAdmin')}
+                      </button>
+                      <button
+                        className="btn btn-small btn-secondary"
+                        onClick={() => run(adminRequest('account-update', { accountId: a.id, disabled: !a.disabled }))}
+                      >
+                        {a.disabled ? t('admin.accEnable') : t('admin.accDisable')}
+                      </button>
+                      <button
+                        className="btn btn-small btn-danger"
+                        onClick={() => {
+                          if (window.confirm(t('admin.accDeleteConfirm', { login: a.login }))) run(adminRequest('account-delete', { accountId: a.id }))
+                        }}
+                      >
+                        <TrashIcon width={14} height={14} />
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   )
 }
 

@@ -20,6 +20,7 @@ import { Avatar } from './Common'
 import {
   CameraIcon,
   CameraOffIcon,
+  EyeIcon,
   EyeOffIcon,
   ExpandIcon,
   FocusIcon,
@@ -137,6 +138,33 @@ export function VoiceStage() {
   )
 }
 
+/** Кто смотрит демонстрацию: значок с числом зрителей, по нажатию — список. */
+function StreamViewers({ streamerId }: { streamerId: string }) {
+  const { t } = useTranslation()
+  const voiceStates = useApp((s) => s.voiceStates)
+  const users = useApp((s) => s.users)
+  const [open, setOpen] = useState(false)
+  const names = Object.values(voiceStates)
+    .filter((v) => v.userId !== streamerId && v.watching?.includes(streamerId))
+    .map((v) => users[v.userId]?.nickname ?? '…')
+    .sort((a, b) => a.localeCompare(b))
+  return (
+    <div className="tile-viewers-wrap" onDoubleClick={(e) => e.stopPropagation()}>
+      <button className="tile-viewers" title={names.join(', ') || t('stage.viewersNone')} onClick={() => setOpen((v) => !v)}>
+        <span className="live-badge">{t('stage.live')}</span>
+        <EyeIcon width={14} height={14} />
+        {names.length}
+      </button>
+      {open && (
+        <div className="tile-menu viewers-menu" onMouseLeave={() => setOpen(false)}>
+          <div className="viewers-title">{t('stage.viewersTitle')}</div>
+          {names.length === 0 ? <div className="viewers-empty">{t('stage.viewersNone')}</div> : names.map((n) => <div key={n}>{n}</div>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
   const { t } = useTranslation()
   const user = useApp((s) => s.users[tile.userId])
@@ -233,6 +261,8 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
         </div>
       )}
       {remote && showVideo && !remote.active && <div className="tile-paused">{t('stage.paused')}</div>}
+
+      {tile.kind === 'screen' && <StreamViewers streamerId={tile.userId} />}
 
       <div className="tile-label">
         {voice?.deafened ? (

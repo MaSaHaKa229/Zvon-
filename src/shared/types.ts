@@ -18,6 +18,18 @@ export interface UserInfo {
   isAdmin: boolean
 }
 
+/** Аккаунт для входа по логину (сервер с аккаунтами). Видит только администратор. */
+export interface AccountInfo {
+  id: string
+  login: string
+  nickname: string
+  isAdmin: boolean
+  disabled: boolean
+  online: boolean
+  createdAt: number
+  lastSeen: number | null
+}
+
 export type FileKind = 'image' | 'video' | 'audio' | 'file' | 'avatar'
 
 /** Файл, хранящийся на хосте. */
@@ -67,6 +79,10 @@ export interface VoiceState {
   muted: boolean
   deafened: boolean
   joinedAt: number
+  /** Показывает свой экран прямо сейчас. */
+  streaming: boolean
+  /** Чьи демонстрации экрана смотрит (userId ведущих). */
+  watching: string[]
 }
 
 export interface ProducerInfo {
@@ -157,6 +173,8 @@ export interface ServerSnapshot {
   /** Токен для HTTP-запросов к файлам (?t= или Authorization: Bearer). */
   fileToken: string
   maxUploadBytes: number
+  /** Вход по аккаунту: логин текущего пользователя; null — сервер без аккаунтов. */
+  account: { login: string } | null
 }
 
 /* ---------------- Запросы клиент → сервер и ответы на них ---------------- */
@@ -168,7 +186,10 @@ export interface RequestMap {
     nickname: string
     password: string
     adminToken?: string
+    /** Логин аккаунта — на сервере с аккаунтами (тогда password — пароль аккаунта, nickname не используется). */
+    login?: string
   }
+  'password-change': { oldPassword: string; newPassword: string }
   ping: Record<string, never>
   'msg-send': { channelId: string; content: string; nonce?: string; attachments?: string[] }
   'msg-edit': { messageId: number; content: string }
@@ -203,6 +224,11 @@ export interface RequestMap {
   'channel-rename': { channelId: string; name: string }
   'channel-delete': { channelId: string }
   'channel-move': { channelId: string; direction: 'up' | 'down' }
+  'account-list': Record<string, never>
+  'account-create': { login: string; password: string; isAdmin: boolean }
+  /** password — задать новый пароль; disabled — запретить вход. */
+  'account-update': { accountId: string; password?: string; isAdmin?: boolean; disabled?: boolean }
+  'account-delete': { accountId: string }
 }
 
 export interface ResponseMap {
@@ -239,6 +265,11 @@ export interface ResponseMap {
   'channel-rename': { channel: Channel }
   'channel-delete': Record<string, never>
   'channel-move': Record<string, never>
+  'password-change': Record<string, never>
+  'account-list': { accounts: AccountInfo[] }
+  'account-create': { account: AccountInfo }
+  'account-update': { account: AccountInfo }
+  'account-delete': Record<string, never>
 }
 
 export type RequestType = keyof RequestMap

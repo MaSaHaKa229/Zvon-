@@ -94,10 +94,11 @@ export const webApi: ZvonApi = {
     }
   },
   async trustServer() {},
-  async rememberServer(host, port, name, password, adminToken) {
+  async rememberServer(host, port, name, password, adminToken, login) {
     const entry: RecentServer = { host, port, name, lastUsed: Date.now() }
     if (password) entry.password = password
     if (adminToken) entry.adminToken = adminToken
+    if (login) entry.login = login
     save({ recentServers: [entry] })
     return store.recentServers
   },

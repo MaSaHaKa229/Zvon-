@@ -851,6 +851,22 @@ export class VoiceEngine {
     this.reconcile(v)
   }
 
+  /**
+   * Возобновляет звук собеседников, если браузер поставил его на паузу.
+   * Мобильные браузеры отдают звук видео из чата и сами звонок не возвращают.
+   */
+  resumePlayback(): void {
+    for (const r of this.remotes.values()) {
+      if (r.el.paused) r.el.play().catch(() => undefined)
+    }
+  }
+
+  /** Есть ли звук собеседников на паузе (нужно вернуть). */
+  get playbackStalled(): boolean {
+    for (const r of this.remotes.values()) if (r.el.paused) return true
+    return false
+  }
+
   /** Окно свёрнуто или скрыто — видео ставится на паузу (кроме отдельных окон просмотра). */
   setPageVisible(visible: boolean): void {
     if (this.pageVisible === visible) return

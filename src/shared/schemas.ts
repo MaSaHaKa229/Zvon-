@@ -27,6 +27,14 @@ const channelName = z
   // eslint-disable-next-line no-control-regex
   .refine((v) => !/[\u0000-\u001f]/.test(v), 'Недопустимые символы в названии')
 const fileId = z.string().regex(/^[0-9a-f]{32}$/, 'Неверный id файла')
+const login = z
+  .string()
+  .trim()
+  .regex(/^[a-zA-Z0-9._-]{2,32}$/, 'Логин: от 2 до 32 латинских букв, цифр, точек, дефисов или подчёркиваний')
+const newPassword = z
+  .string()
+  .min(LIMITS.accountPasswordMin, `Пароль не короче ${LIMITS.accountPasswordMin} символов`)
+  .max(LIMITS.passwordLength, `Пароль длиннее ${LIMITS.passwordLength} символов`)
 
 export const requestSchemas = {
   hello: z.object({
@@ -34,8 +42,14 @@ export const requestSchemas = {
     clientId: z.string().min(8).max(64),
     nickname,
     password: z.string().max(LIMITS.passwordLength),
-    adminToken: z.string().max(128).optional()
+    adminToken: z.string().max(128).optional(),
+    login: z.string().trim().max(64).optional()
   }),
+  'password-change': z.object({ oldPassword: z.string().max(LIMITS.passwordLength), newPassword }),
+  'account-list': z.object({}),
+  'account-create': z.object({ login, password: newPassword, isAdmin: z.boolean() }),
+  'account-update': z.object({ accountId: id, password: newPassword.optional(), isAdmin: z.boolean().optional(), disabled: z.boolean().optional() }),
+  'account-delete': z.object({ accountId: id }),
   ping: z.object({}),
   'msg-send': z
     .object({

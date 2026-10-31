@@ -13,6 +13,8 @@ export interface RecentServer {
   password?: string
   /** Ключ администратора — сохраняется вместе с паролем. */
   adminToken?: string
+  /** Логин аккаунта (сервер с аккаунтами). */
+  login?: string
 }
 
 export interface TrustedCert {
@@ -60,6 +62,8 @@ export interface HostStatus {
 export interface ServerHealth {
   app: string
   name: string
+  /** Вход по логину и паролю аккаунта. */
+  accounts?: boolean
   version: string
   protocol: number
   requiresPassword: boolean
@@ -137,7 +141,7 @@ export interface ZvonApi {
   setNickname(nickname: string): Promise<void>
   probeServer(host: string, port: number): Promise<ProbeResult>
   trustServer(host: string, port: number, fingerprint: string): Promise<void>
-  rememberServer(host: string, port: number, name: string, password?: string, adminToken?: string): Promise<RecentServer[]>
+  rememberServer(host: string, port: number, name: string, password?: string, adminToken?: string, login?: string): Promise<RecentServer[]>
   forgetServer(host: string, port: number): Promise<RecentServer[]>
   startHost(settings: HostSettings): Promise<HostStatus>
   stopHost(): Promise<HostStatus>

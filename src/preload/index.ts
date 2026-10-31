@@ -14,8 +14,8 @@ const api: ZvonApi = {
   setNickname: (nickname) => ipcRenderer.invoke('app:set-nickname', nickname),
   probeServer: (host, port) => ipcRenderer.invoke('server:probe', host, port),
   trustServer: (host, port, fingerprint) => ipcRenderer.invoke('server:trust', host, port, fingerprint),
-  rememberServer: (host, port, name, password, adminToken) =>
-    ipcRenderer.invoke('server:remember', host, port, name, password, adminToken),
+  rememberServer: (host, port, name, password, adminToken, login) =>
+    ipcRenderer.invoke('server:remember', host, port, name, password, adminToken, login),
   forgetServer: (host, port) => ipcRenderer.invoke('server:forget', host, port),
   startHost: (settings) => ipcRenderer.invoke('host:start', settings),
   stopHost: () => ipcRenderer.invoke('host:stop'),

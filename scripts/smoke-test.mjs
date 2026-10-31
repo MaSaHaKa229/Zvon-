@@ -14,10 +14,10 @@ import { randomUUID } from 'node:crypto'
 const require = createRequire(import.meta.url)
 const WebSocket = require('ws')
 
-const PORT = 17000 + Math.floor(Math.random() * 2000)
+let PORT = 17000 + Math.floor(Math.random() * 2000)
 const PASSWORD = 'test-pass'
 const ADMIN_TOKEN = 'admin-token-for-tests-0123456789'
-const dataDir = mkdtempSync(join(tmpdir(), 'zvon-test-'))
+let dataDir = mkdtempSync(join(tmpdir(), 'zvon-test-'))
 
 /** Версию протокола берём из /health, чтобы тест не устаревал. */
 let PROTOCOL = 0
@@ -33,12 +33,12 @@ const ok = (cond, name) => {
   }
 }
 
-function startServer() {
+function startServer(args = ['--password', PASSWORD, '--admin-token', ADMIN_TOKEN]) {
   const useNode = process.env.ZVON_TEST_NODE === '1'
   const bin = useNode ? process.execPath : require('electron')
   const child = spawn(
     bin,
-    ['out/main/server.js', '--data', dataDir, '--port', String(PORT), '--password', PASSWORD, '--name', 'Тестовый сервер', '--max-upload-mb', '1', '--admin-token', ADMIN_TOKEN],
+    ['out/main/server.js', '--data', dataDir, '--port', String(PORT), '--name', 'Тестовый сервер', '--max-upload-mb', '1', ...args],
     { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZVON_VERSION: 'test' }, stdio: ['ignore', 'pipe', 'pipe'] }
   )
   return new Promise((resolve, reject) => {
@@ -159,6 +159,11 @@ class TestClient {
     return this.req('hello', { protocol: PROTOCOL, clientId: this.clientId, nickname, password, adminToken })
   }
 
+  /** Вход по аккаунту (сервер с аккаунтами). */
+  async login(login, password) {
+    return this.req('hello', { protocol: PROTOCOL, clientId: this.clientId, nickname: login, password, login })
+  }
+
   waitFor(t, pred = () => true, ms = 3000) {
     const found = this.events.find((e) => e.t === t && pred(e.d))
     if (found) return Promise.resolve(found)
@@ -180,6 +185,91 @@ class TestClient {
 
   clear() {
     this.events = []
+  }
+}
+
+/** Сервер с аккаунтами: отдельный запуск со своими данными. */
+async function accountsPhase() {
+  PORT += 1
+  dataDir = mkdtempSync(join(tmpdir(), 'zvon-test-acc-'))
+  const { child } = await startServer(['--admin-login', 'admin', '--admin-password', 'admin-pass'])
+  const clients = []
+  const client = async (name) => {
+    const c = new TestClient(name)
+    await c.open()
+    clients.push(c)
+    return c
+  }
+  try {
+    console.log('\nАккаунты')
+    const h = await health()
+    ok(h.body.accounts === true && h.body.requiresPassword === true, 'health сообщает, что вход по аккаунтам')
+    const noLogin = await (await client('Гость')).hello('admin-pass')
+    ok(!noLogin.ok, 'без логина войти нельзя')
+    const wrong = await (await client('Админ')).login('admin', 'wrong-pass')
+    ok(!wrong.ok && wrong.err.code === 'wrong_password', 'неверный пароль администратора отклонён')
+    const admin = await client('Админ')
+    const ra = await admin.login('ADMIN', 'admin-pass')
+    ok(ra.ok && ra.d.you.isAdmin && ra.d.account?.login === 'admin', 'администратор вошёл (логин без учёта регистра)')
+
+    const created = await admin.req('account-create', { login: 'vasya', password: 'vasya-123', isAdmin: false })
+    ok(created.ok && created.d.account.login === 'vasya' && created.d.account.nickname === 'vasya', 'администратор создал аккаунт')
+    const dup = await admin.req('account-create', { login: 'Vasya', password: 'whatever1', isAdmin: false })
+    ok(!dup.ok, 'повторный логин не создаётся')
+    const short = await admin.req('account-create', { login: 'kolya', password: '123', isAdmin: false })
+    ok(!short.ok, 'слишком короткий пароль отклонён')
+    const petya = await admin.req('account-create', { login: 'petya', password: 'petya-123', isAdmin: false })
+
+    const vasya = await client('Вася')
+    const rv = await vasya.login('vasya', 'vasya-123')
+    ok(rv.ok && rv.d.you.nickname === 'vasya' && !rv.d.you.isAdmin, 'пользователь вошёл, ник — логин')
+    const forbidden = await vasya.req('account-list', {})
+    ok(!forbidden.ok, 'обычный пользователь не видит аккаунты')
+    const nick = await vasya.req('profile-update', { nickname: 'Василий' })
+    ok(nick.ok && nick.d.user.nickname === 'Василий', 'пользователь сменил ник')
+
+    const p = await client('Петя')
+    const rp = await p.login('petya', 'petya-123')
+    const taken = await p.req('profile-update', { nickname: 'василий' })
+    ok(rp.ok && !taken.ok, 'чужой ник занять нельзя')
+
+    const badChange = await vasya.req('password-change', { oldPassword: 'nope', newPassword: 'vasya-456' })
+    ok(!badChange.ok, 'смена пароля с неверным текущим отклонена')
+    const change = await vasya.req('password-change', { oldPassword: 'vasya-123', newPassword: 'vasya-456' })
+    ok(change.ok, 'пользователь сменил пароль')
+
+    const phone = await client('Вася с телефона')
+    const rphone = await phone.login('vasya', 'vasya-456')
+    ok(rphone.ok && rphone.d.you.id === rv.d.you.id && rphone.d.you.nickname === 'Василий', 'вход с другого устройства — тот же пользователь и ник')
+    await new Promise((r) => setTimeout(r, 200))
+    ok(vasya.closeCode === 4001, 'прежнее подключение вытеснено')
+
+    const list = await admin.req('account-list', {})
+    ok(list.ok && list.d.accounts.length === 3 && list.d.accounts.find((a) => a.login === 'vasya')?.online === true, 'список аккаунтов с отметкой «в сети»')
+    const selfDisable = await admin.req('account-update', { accountId: ra.d.you.id, disabled: true })
+    ok(!selfDisable.ok, 'администратор не может отключить себя')
+
+    const disable = await admin.req('account-update', { accountId: rv.d.you.id, disabled: true })
+    await new Promise((r) => setTimeout(r, 200))
+    ok(disable.ok && phone.closeCode === 4003, 'отключённый аккаунт сразу выходит с сервера')
+    const afterDisable = await (await client('Вася')).login('vasya', 'vasya-456')
+    ok(!afterDisable.ok && /отключ/.test(afterDisable.err.message), 'отключённый аккаунт не может войти')
+
+    const reset = await admin.req('account-update', { accountId: petya.d.account.id, password: 'petya-new-1' })
+    const petyaNew = await (await client('Петя')).login('petya', 'petya-new-1')
+    ok(reset.ok && petyaNew.ok, 'администратор задал новый пароль, вход с ним работает')
+    const del = await admin.req('account-delete', { accountId: petya.d.account.id })
+    const petyaGone = await (await client('Петя')).login('petya', 'petya-new-1')
+    ok(del.ok && !petyaGone.ok, 'удалённый аккаунт не может войти')
+  } finally {
+    for (const c of clients) c.ws?.close()
+    child.kill('SIGTERM')
+    await new Promise((r) => setTimeout(r, 500))
+    try {
+      rmSync(dataDir, { recursive: true, force: true })
+    } catch {
+      /* Windows может держать файл БД ещё мгновение */
+    }
   }
 }
 
@@ -448,6 +538,33 @@ async function main() {
       await bob3.waitFor('consumer-closed', (d) => d.consumerId === vcons.d.consumerId)
       ok(true, 'у Боба закрылся приём камеры')
 
+      // Демонстрация экрана: кто ведёт и кто смотрит
+      const scr = await alice.req('produce', {
+        transportId: send.d.id,
+        kind: 'video',
+        source: 'screen',
+        rtpParameters: {
+          mid: '2',
+          codecs: [{ mimeType: 'video/VP8', payloadType: vp8.preferredPayloadType, clockRate: 90000, parameters: {}, rtcpFeedback: [] }],
+          headerExtensions: [],
+          encodings: [{ ssrc: 44440001 }],
+          rtcp: { cname: 'alice', reducedSize: true }
+        }
+      })
+      ok(scr.ok, 'Алиса начала демонстрацию экрана' + (scr.ok ? '' : `: ${scr.err.message}`))
+      await bob3.waitFor('voice-state', (d) => d.userId === ra.d.you.id && d.state?.streaming === true)
+      ok(true, 'Боб видит, что Алиса в эфире')
+      const scons = await bob3.req('consume', { producerId: scr.d.producerId })
+      await bob3.req('consumer-resume', { consumerId: scons.d.consumerId })
+      await alice.waitFor('voice-state', (d) => d.userId === rb.d.you.id && d.state?.watching?.includes(ra.d.you.id))
+      ok(true, 'Алиса видит, что Боб смотрит её экран')
+      await bob3.req('consumer-pause', { consumerId: scons.d.consumerId })
+      await alice.waitFor('voice-state', (d) => d.userId === rb.d.you.id && d.state?.watching?.length === 0)
+      ok(true, 'Боб свернул демонстрацию — больше не в списке зрителей')
+      await alice.req('producer-close', { producerId: scr.d.producerId })
+      await bob3.waitFor('voice-state', (d) => d.userId === ra.d.you.id && d.state?.streaming === false)
+      ok(true, 'демонстрация закончилась — Алиса больше не в эфире')
+
       const pause = await alice.req('producer-pause', { producerId: prod.d.producerId })
       const resume = await alice.req('producer-resume', { producerId: prod.d.producerId })
       ok(pause.ok && resume.ok, 'пауза и возобновление микрофона')
@@ -556,6 +673,8 @@ async function main() {
       /* Windows может держать файл БД ещё мгновение */
     }
   }
+
+  await accountsPhase()
 
   console.log(`\nИтог: ${passed} пройдено, ${failures} провалено`)
   process.exit(failures ? 1 : 0)

@@ -158,6 +158,25 @@ export class VoiceManager {
     this.log.info(`Голосовая комната ${room.channelId} закрыта (пусто)`)
   }
 
+  /**
+   * Пересчитывает, ведёт ли участник демонстрацию и чьи демонстрации смотрит,
+   * и рассылает его состояние, если что-то изменилось. Смотрит — значит приём видео экрана не на паузе
+   * (клиент ставит его на паузу, когда плитка скрыта или окно свёрнуто).
+   */
+  private refreshMediaState(peer: VoicePeer): void {
+    const channelId = this.where.get(peer.userId)
+    if (!channelId || this.rooms.get(channelId)?.peers.get(peer.userId) !== peer) return
+    const streaming = [...peer.producers.values()].some((p) => !p.closed && p.kind === 'video' && sourceOf(p) === 'screen')
+    const watching = new Set<string>()
+    for (const c of peer.consumers.values()) {
+      if (!c.closed && !c.paused && c.kind === 'video' && sourceOf(c) === 'screen') watching.add(String(c.appData.userId))
+    }
+    const list = [...watching].sort()
+    if (streaming === peer.state.streaming && list.join() === peer.state.watching.join()) return
+    peer.state = { ...peer.state, streaming, watching: list }
+    this.io.broadcast('voice-state', { userId: peer.userId, state: peer.state })
+  }
+
   /* ======================= вход и выход ======================= */
 
   async join(userId: string, d: RequestMap['voice-join']): Promise<{ channelId: string; routerRtpCapabilities: MediaJson }> {
@@ -179,7 +198,10 @@ export class VoiceManager {
     }
     if (room.peers.size >= MAX_PEERS_PER_ROOM) throw new RequestError(ErrorCode.Forbidden, 'Голосовой канал переполнен')
 
-    const state: VoiceState = oldState ?? { userId, channelId: d.channelId, muted: false, deafened: false, joinedAt: Date.now() }
+    // Демонстрации и просмотры после перехода начинаются заново — их состояние пересчитывается по потокам.
+    const state: VoiceState = oldState
+      ? { ...oldState, streaming: false, watching: [] }
+      : { userId, channelId: d.channelId, muted: false, deafened: false, joinedAt: Date.now(), streaming: false, watching: [] }
     room.peers.set(userId, {
       userId,
       state,
@@ -343,7 +365,10 @@ export class VoiceManager {
     peer.producers.set(producer.id, producer)
 
     producer.on('transportclose', () => peer.producers.delete(producer.id))
-    producer.observer.on('close', () => peer.producers.delete(producer.id))
+    producer.observer.on('close', () => {
+      peer.producers.delete(producer.id)
+      this.refreshMediaState(peer)
+    })
 
     if (d.source === 'mic') {
       room.levels.addProducer({ producerId: producer.id }).catch((err) => this.log.warn('AudioLevelObserver', err))
@@ -356,6 +381,7 @@ export class VoiceManager {
       if (other.userId !== userId && other.rtpCapabilities) this.io.send(other.userId, 'new-producer', info)
     }
     this.log.info(`${userId}: новый поток ${d.source}/${d.kind} ${producer.id}`)
+    this.refreshMediaState(peer)
     return { producerId: producer.id }
   }
 
@@ -422,6 +448,7 @@ export class VoiceManager {
 
     const drop = (): void => {
       peer.consumers.delete(consumer.id)
+      this.refreshMediaState(peer)
     }
     consumer.on('transportclose', drop)
     consumer.on('producerclose', () => {
@@ -462,12 +489,14 @@ export class VoiceManager {
   async resumeConsumer(userId: string, d: RequestMap['consumer-resume']): Promise<Record<string, never>> {
     const { peer } = this.peerOf(userId)
     await this.consumerOf(peer, d.consumerId).resume()
+    this.refreshMediaState(peer)
     return {}
   }
 
   async pauseConsumer(userId: string, d: RequestMap['consumer-pause']): Promise<Record<string, never>> {
     const { peer } = this.peerOf(userId)
     await this.consumerOf(peer, d.consumerId).pause()
+    this.refreshMediaState(peer)
     return {}
   }
 

@@ -19,6 +19,7 @@ import { ZvonDb } from './db'
 import { Hub } from './hub'
 import { listAddresses } from './interfaces'
 import { FileService } from './files'
+import { hashPassword } from './accounts'
 import { findWebDir, serveWeb } from './web'
 import { SfuService } from './sfu'
 import { createLogger, type Logger } from './logger'
@@ -68,7 +69,8 @@ function makeRequestHandler(cfg: ServerConfig, hub: () => Hub | null, files: Fil
           name: cfg.serverName,
           version: cfg.version,
           protocol: PROTOCOL_VERSION,
-          requiresPassword: cfg.password.length > 0,
+          requiresPassword: cfg.password.length > 0 || cfg.adminLogin.length > 0,
+          accounts: cfg.adminLogin.length > 0,
           voice: hub()?.voiceAvailable ?? false,
           online: hub()?.onlineCount ?? 0
         })
@@ -114,6 +116,7 @@ export async function startServer(
   log.info(`Запуск сервера «${cfg.serverName}» на ${cfg.bindAddress}:${cfg.port}, пароль ${cfg.password ? 'задан' : 'не задан'}`)
 
   const db = new ZvonDb(join(cfg.dataDir, 'zvon.db'), log.child('db'))
+  if (cfg.adminLogin) await ensureAdminAccount(cfg, db, log)
   const sfu = new SfuService(cfg, log.child('sfu'))
   const files = new FileService(db, cfg, log.child('files'))
   files.start()
@@ -189,6 +192,23 @@ export async function startServer(
 
 /* ======================= точка входа процесса ======================= */
 
+/** Сервер с аккаунтами: создаёт первого администратора (или сбрасывает его пароль по флагу). */
+async function ensureAdminAccount(cfg: ServerConfig, db: ZvonDb, log: Logger): Promise<void> {
+  const existing = db.getAccountByLogin(cfg.adminLogin)
+  const passwordOk = cfg.adminPassword.length >= LIMITS.accountPasswordMin
+  if (!existing) {
+    if (!passwordOk) throw new Error(`Задайте пароль администратора (ZVON_ADMIN_PASSWORD) не короче ${LIMITS.accountPasswordMin} символов`)
+    db.createAccount(cfg.adminLogin, await hashPassword(cfg.adminPassword), true)
+    log.info(`Создан аккаунт администратора «${cfg.adminLogin}»`)
+    return
+  }
+  if (cfg.adminResetPassword) {
+    if (!passwordOk) throw new Error(`Для сброса задайте ZVON_ADMIN_PASSWORD не короче ${LIMITS.accountPasswordMin} символов`)
+    db.updateAccount(existing.id, { passwordHash: await hashPassword(cfg.adminPassword), isAdmin: true, disabled: false })
+    log.warn(`Пароль администратора «${cfg.adminLogin}» сброшен. Уберите ZVON_ADMIN_RESET_PASSWORD из настроек.`)
+  }
+}
+
 /** Версия из package.json рядом со сборкой (out/main/server.js → ../../package.json). */
 function packageVersion(): string | undefined {
   try {
@@ -258,7 +278,7 @@ function bootstrap(): void {
     console.error('Каждый параметр можно задать переменной окружения: --rtc-port → ZVON_RTC_PORT, --data → ZVON_DATA и т. д.')
     process.exit(2)
   }
-  if (!argCfg.password) console.warn('ВНИМАНИЕ: пароль не задан — войти сможет любой, кто знает адрес сервера.')
+  if (!argCfg.password && !argCfg.adminLogin) console.warn('ВНИМАНИЕ: пароль не задан — войти сможет любой, кто знает адрес сервера.')
   startServer({ ...argCfg, adminToken: argCfg.adminToken ?? '', version: process.env.ZVON_VERSION || packageVersion() })
     .then((srv) => {
       running = srv

@@ -27,6 +27,15 @@ export interface ServerConfig {
   trustProxy: boolean
   /** Каталог веб-версии; пусто — out/web рядом со сборкой, если он есть. */
   webDir: string
+  /**
+   * Логин первого администратора. Задан — сервер работает с аккаунтами: вход по логину и паролю,
+   * аккаунты создаёт администратор (пароль сервера тогда не нужен). Пусто — вход по нику и общему паролю.
+   */
+  adminLogin: string
+  /** Пароль первого администратора (используется, только когда аккаунт создаётся). */
+  adminPassword: string
+  /** Сбросить пароль администратора на adminPassword при запуске (если его забыли). */
+  adminResetPassword: boolean
   /** Максимальный размер одного файла, МБ. */
   maxUploadMb: number
 }
@@ -89,7 +98,10 @@ export function normalizeConfig(input: Partial<ServerConfig> & { dataDir: string
     rtcIps: (input.rtcIps ?? []).filter((ip) => IPV4.test(ip)),
     announcedIp: normalizeAnnouncedIp(input.announcedIp),
     trustProxy: Boolean(input.trustProxy),
-    webDir: input.webDir?.trim() ?? ''
+    webDir: input.webDir?.trim() ?? '',
+    adminLogin: input.adminLogin?.trim() ?? '',
+    adminPassword: input.adminPassword ?? '',
+    adminResetPassword: Boolean(input.adminResetPassword)
   }
 }
 
@@ -123,6 +135,9 @@ export function configFromArgv(
     announcedIp: get('--announced-ip'),
     trustProxy: ['1', 'true', 'yes'].includes((get('--trust-proxy') ?? '').toLowerCase()),
     webDir: get('--web-dir'),
+    adminLogin: get('--admin-login'),
+    adminPassword: get('--admin-password'),
+    adminResetPassword: ['1', 'true', 'yes'].includes((get('--admin-reset-password') ?? '').toLowerCase()),
     adminToken: get('--admin-token')
   }
 }

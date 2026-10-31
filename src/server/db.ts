@@ -57,6 +57,16 @@ const MIGRATIONS: string[] = [
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  `,
+  `
+  CREATE TABLE accounts (
+    id            TEXT PRIMARY KEY,
+    login         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
+    disabled      INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+  );
   `
 ]
 
@@ -145,6 +155,44 @@ interface ChannelRow {
   type: ChannelType
   position: number
 }
+
+/** Аккаунт вместе с профилем (ник и аватарка — в users с тем же id). */
+export interface StoredAccount {
+  id: string
+  login: string
+  passwordHash: string
+  isAdmin: boolean
+  disabled: boolean
+  createdAt: number
+  nickname: string
+  lastSeen: number | null
+}
+
+interface AccountRow {
+  id: string
+  login: string
+  password_hash: string
+  is_admin: number
+  disabled: number
+  created_at: number
+  nickname: string | null
+  last_seen: number | null
+}
+
+function rowToAccount(r: AccountRow): StoredAccount {
+  return {
+    id: r.id,
+    login: r.login,
+    passwordHash: r.password_hash,
+    isAdmin: r.is_admin === 1,
+    disabled: r.disabled === 1,
+    createdAt: r.created_at,
+    nickname: r.nickname ?? r.login,
+    lastSeen: r.last_seen
+  }
+}
+
+const ACCOUNT_SELECT = `SELECT a.*, u.nickname, u.last_seen FROM accounts a LEFT JOIN users u ON u.id = a.id`
 
 export interface StoredUser {
   id: string
@@ -323,12 +371,69 @@ export class ZvonDb {
     return r ? { id: r.id, nickname: r.nickname, avatar: r.avatar, lastSeen: r.last_seen } : null
   }
 
-  /** Недавние пользователи (для списка участников «не в сети»). */
-  listUsers(limit = 200): StoredUser[] {
+  /**
+   * Недавние пользователи (для списка участников «не в сети»).
+   * accountsOnly — только владельцы аккаунтов (без гостей, входивших до включения аккаунтов).
+   */
+  listUsers(limit = 200, accountsOnly = false): StoredUser[] {
+    const where = accountsOnly ? 'WHERE id IN (SELECT id FROM accounts)' : ''
     const rows = this.db
-      .prepare('SELECT id, nickname, avatar, last_seen FROM users ORDER BY last_seen DESC LIMIT ?')
+      .prepare(`SELECT id, nickname, avatar, last_seen FROM users ${where} ORDER BY last_seen DESC LIMIT ?`)
       .all(limit) as Array<{ id: string; nickname: string; avatar: string | null; last_seen: number }>
     return rows.map((r) => ({ id: r.id, nickname: r.nickname, avatar: r.avatar, lastSeen: r.last_seen }))
+  }
+
+  /** Ник занят другим пользователем (без учёта регистра; lower() в SQLite не знает кириллицу — сравниваем в JS). */
+  nicknameTaken(nickname: string, exceptId: string, accountsOnly: boolean): boolean {
+    const where = accountsOnly ? 'AND id IN (SELECT id FROM accounts)' : ''
+    const wanted = nickname.toLocaleLowerCase()
+    const rows = this.db.prepare(`SELECT nickname FROM users WHERE id != ? ${where}`).all(exceptId) as Array<{ nickname: string }>
+    return rows.some((r) => r.nickname.toLocaleLowerCase() === wanted)
+  }
+
+  /* ---------- аккаунты ---------- */
+
+  hasAccounts(): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM accounts LIMIT 1').get())
+  }
+
+  listAccounts(): StoredAccount[] {
+    return (this.db.prepare(`${ACCOUNT_SELECT} ORDER BY a.login COLLATE NOCASE`).all() as AccountRow[]).map(rowToAccount)
+  }
+
+  getAccount(id: string): StoredAccount | null {
+    const r = this.db.prepare(`${ACCOUNT_SELECT} WHERE a.id = ?`).get(id) as AccountRow | undefined
+    return r ? rowToAccount(r) : null
+  }
+
+  getAccountByLogin(login: string): StoredAccount | null {
+    const r = this.db.prepare(`${ACCOUNT_SELECT} WHERE a.login = ? COLLATE NOCASE`).get(login) as AccountRow | undefined
+    return r ? rowToAccount(r) : null
+  }
+
+  /** Создаёт аккаунт и его профиль; ник по умолчанию — логин. */
+  createAccount(login: string, passwordHash: string, isAdmin: boolean): StoredAccount {
+    const id = randomUUID()
+    const now = Date.now()
+    this.db.transaction(() => {
+      this.db
+        .prepare('INSERT INTO accounts (id, login, password_hash, is_admin, disabled, created_at) VALUES (?, ?, ?, ?, 0, ?)')
+        .run(id, login, passwordHash, isAdmin ? 1 : 0, now)
+      this.db.prepare('INSERT INTO users (id, nickname, avatar, created_at, last_seen) VALUES (?, ?, NULL, ?, 0)').run(id, login, now)
+    })()
+    return this.getAccount(id)!
+  }
+
+  updateAccount(id: string, patch: { passwordHash?: string; isAdmin?: boolean; disabled?: boolean }): StoredAccount | null {
+    if (patch.passwordHash !== undefined) this.db.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?').run(patch.passwordHash, id)
+    if (patch.isAdmin !== undefined) this.db.prepare('UPDATE accounts SET is_admin = ? WHERE id = ?').run(patch.isAdmin ? 1 : 0, id)
+    if (patch.disabled !== undefined) this.db.prepare('UPDATE accounts SET disabled = ? WHERE id = ?').run(patch.disabled ? 1 : 0, id)
+    return this.getAccount(id)
+  }
+
+  /** Удаляет аккаунт; сообщения и профиль остаются (в истории видно имя автора). */
+  deleteAccount(id: string): void {
+    this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id)
   }
 
   /* ---------- сообщения ---------- */

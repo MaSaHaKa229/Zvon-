@@ -65,13 +65,19 @@ export function setNicknameDraft(nickname: string): void {
  */
 export async function beginConnect(target: ConnTarget): Promise<void> {
   const nickname = getApp().nickname.trim()
-  if (!nickname) {
+  // С аккаунтом ник берётся с сервера.
+  if (target.login !== undefined) {
+    if (!target.login.trim() || !target.password) {
+      setApp({ connectError: t('connect.errLogin') })
+      return
+    }
+  } else if (!nickname) {
     setApp({ connectError: t('connect.errNickname') })
     return
   }
   setApp({ connecting: true, connectError: null })
   try {
-    await window.zvon.setNickname(nickname)
+    if (nickname) await window.zvon.setNickname(nickname)
     const probe = await window.zvon.probeServer(target.host, target.port)
     if (!probe.ok) {
       setApp({ connecting: false, connectError: probe.error })
@@ -104,8 +110,12 @@ export function rejectTrust(): void {
   setApp({ trustPrompt: null, connecting: false })
 }
 
+/** Сервер текущей сессии — чтобы обновить сохранённый пароль после его смены. */
+let sessionTarget: { target: ConnTarget; serverName: string } | null = null
+
 async function openSession(target: ConnTarget, serverName: string): Promise<void> {
   disposeClient()
+  sessionTarget = { target, serverName }
   const boot = getApp().boot!
   const hostStatus = getApp().hostStatus
   const isOwnServer = target.host === '127.0.0.1' && hostStatus.state === 'running' && hostStatus.port === target.port
@@ -116,9 +126,10 @@ async function openSession(target: ConnTarget, serverName: string): Promise<void
       port: target.port,
       hello: {
         clientId: boot.clientId,
-        nickname: getApp().nickname.trim(),
+        nickname: getApp().nickname.trim() || target.login?.trim() || 'user',
         password: target.password,
-        adminToken: isOwnServer ? boot.adminToken : target.adminToken || undefined
+        adminToken: isOwnServer ? boot.adminToken : target.adminToken || undefined,
+        login: target.login?.trim() || undefined
       }
     },
     {
@@ -164,7 +175,8 @@ async function openSession(target: ConnTarget, serverName: string): Promise<void
     target.port,
     isOwnServer ? `${serverName} ${t('host.mine')}` : serverName,
     target.remember ? target.password : undefined,
-    target.remember ? target.adminToken : undefined
+    target.remember ? target.adminToken : undefined,
+    target.login?.trim() || undefined
   )
   setApp({ connecting: false, recentServers, screen: 'main' })
   if (me) setNicknameDraft(me.nickname)
@@ -190,12 +202,14 @@ function applySnapshot(s: ServerSnapshot, isReconnect: boolean): void {
     messages: isReconnect ? {} : prev.messages,
     typing: {},
     fileToken: s.fileToken,
-    maxUploadBytes: s.maxUploadBytes
+    maxUploadBytes: s.maxUploadBytes,
+    account: s.account ?? null
   })
   if (currentChannelId) void loadHistory(currentChannelId)
   if (isReconnect) retryFailedPending()
   // Своя аватарка хранится локально и сама появляется на новых серверах.
-  else if (!s.you.avatar) void applyLocalAvatar()
+  // С аккаунтами аватарка хранится на сервере и одна на всех устройствах — локальную не подставляем.
+  else if (!s.you.avatar && !s.account) void applyLocalAvatar()
 }
 
 const AVATAR_KEY = 'zvon.avatar'
@@ -234,6 +248,28 @@ async function uploadAndSetAvatar(blob: Blob): Promise<UserInfo> {
   const { user } = await client.request('profile-update', { nickname, avatar: file.id })
   setApp((s) => ({ me: user, users: { ...s.users, [user.id]: user } }))
   return user
+}
+
+/** Смена пароля своего аккаунта. Возвращает текст ошибки или null. */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<string | null> {
+  if (!client) return t('conn.lost')
+  try {
+    await client.request('password-change', { oldPassword, newPassword })
+  } catch (err) {
+    return err instanceof ServerError ? err.message : cleanError(err)
+  }
+  // Переподключение после обрыва должно идти уже с новым паролем.
+  client.updateHello({ password: newPassword })
+  if (sessionTarget) {
+    const { target, serverName } = sessionTarget
+    sessionTarget = { target: { ...target, password: newPassword }, serverName }
+    const saved = getApp().recentServers.find((r) => r.host === target.host && r.port === target.port)
+    if (saved?.password) {
+      const recentServers = await window.zvon.rememberServer(target.host, target.port, saved.name, newPassword, saved.adminToken, saved.login)
+      setApp({ recentServers })
+    }
+  }
+  return null
 }
 
 /** Профиль: ник и (необязательно) новая аватарка; avatar === null — убрать аватарку. */

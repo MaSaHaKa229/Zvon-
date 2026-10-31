@@ -92,6 +92,9 @@ export class HostController extends EventEmitter {
       announcedIp: '',
       trustProxy: false,
       webDir: '',
+      adminLogin: '',
+      adminPassword: '',
+      adminResetPassword: false,
       maxUploadMb: settings.maxUploadMb
     }
 

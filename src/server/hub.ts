@@ -8,6 +8,7 @@ import type { RawData, WebSocket, WebSocketServer } from 'ws'
 import { BITRATE, CloseCode, ErrorCode, LIMITS, PROTOCOL_VERSION, TIMINGS } from '../shared/constants'
 import { isRequestType, parseRequest } from '../shared/schemas'
 import type {
+  AccountInfo,
   AdminSettings,
   AdminStats,
   ClientEnvelope,
@@ -21,7 +22,8 @@ import type {
   UserInfo
 } from '../shared/types'
 import type { ServerConfig } from './config'
-import type { StoredUser, ZvonDb } from './db'
+import { DUMMY_HASH, hashPassword, verifyPassword } from './accounts'
+import type { StoredAccount, StoredUser, ZvonDb } from './db'
 import type { FileService } from './files'
 import type { Logger } from './logger'
 import { ClientSession, RequestError } from './session'
@@ -134,6 +136,11 @@ export class Hub {
           this.broadcast('channels-updated', { channels: this.db.listChannels() })
           return {}
         })(s),
+      'account-list': admin(() => ({ accounts: this.requireAccounts().listAccounts().map((a) => this.accountInfo(a)) })),
+      'account-create': (s, d) => admin(() => this.createAccount(d))(s),
+      'account-update': (s, d) => admin((self) => this.updateAccount(self, d))(s),
+      'account-delete': (s, d) => admin((self) => this.deleteAccount(self, d))(s),
+      'password-change': (s, d) => this.changePassword(s, d),
       hello: (s, d) => this.handleHello(s, d),
       ping: () => ({ time: Date.now() }),
       'msg-send': (s, d) => this.handleSend(s, d),
@@ -377,7 +384,7 @@ export class Hub {
   }
 
   private snapshot(s: ClientSession): ServerSnapshot {
-    const users = this.db.listUsers().map((u) => this.toUserInfo(u))
+    const users = this.db.listUsers(200, this.accountsMode).map((u) => this.toUserInfo(u))
     return {
       serverName: this.cfg.serverName,
       serverVersion: this.cfg.version,
@@ -387,7 +394,8 @@ export class Hub {
       voiceStates: this.voice.states(),
       voiceError: this.sfu.error,
       fileToken: s.fileToken,
-      maxUploadBytes: this.files.maxUploadBytes
+      maxUploadBytes: this.files.maxUploadBytes,
+      account: this.accountsMode ? { login: this.db.getAccount(s.userId!)?.login ?? '' } : null
     }
   }
 
@@ -411,6 +419,37 @@ export class Hub {
     if (this.passwordFails.size > 10000) this.passwordFails.clear()
   }
 
+  private get accountsMode(): boolean {
+    return this.cfg.adminLogin.length > 0
+  }
+
+  private requireAccounts(): ZvonDb {
+    if (!this.accountsMode) throw new RequestError(ErrorCode.BadRequest, 'На этом сервере нет аккаунтов')
+    return this.db
+  }
+
+  /** Проверка логина и пароля. Ответ одинаково медленный, есть логин или нет. */
+  private async authenticate(s: ClientSession, d: RequestMap['hello']): Promise<StoredAccount> {
+    if (!d.login) {
+      s.close(CloseCode.AuthFailed, 'login required')
+      throw new RequestError(ErrorCode.WrongPassword, 'На этом сервере вход по логину и паролю. Обновите приложение.')
+    }
+    const account = this.db.getAccountByLogin(d.login)
+    const ok = await verifyPassword(d.password, account?.passwordHash ?? DUMMY_HASH)
+    if (!account || !ok) {
+      this.notePasswordFail(s.remoteAddress)
+      this.log.warn(`${s.label}: неверный логин или пароль (${d.login})`)
+      await new Promise((r) => setTimeout(r, 700))
+      s.close(CloseCode.AuthFailed, 'wrong password')
+      throw new RequestError(ErrorCode.WrongPassword, 'Неверный логин или пароль')
+    }
+    if (account.disabled) {
+      s.close(CloseCode.AuthFailed, 'disabled')
+      throw new RequestError(ErrorCode.Forbidden, 'Аккаунт отключён администратором')
+    }
+    return account
+  }
+
   private async handleHello(s: ClientSession, d: RequestMap['hello']): Promise<ServerSnapshot> {
     if (s.authenticated) throw new RequestError(ErrorCode.BadRequest, 'Повторный hello')
 
@@ -421,11 +460,12 @@ export class Hub {
         `Версии не совпадают: у вас протокол ${d.protocol}, у хоста ${PROTOCOL_VERSION}. Обновите приложение.`
       )
     }
-    if (this.cfg.password && this.isPasswordLocked(s.remoteAddress)) {
+    if ((this.cfg.password || this.accountsMode) && this.isPasswordLocked(s.remoteAddress)) {
       s.close(CloseCode.AuthFailed, 'too many attempts')
       throw new RequestError(ErrorCode.WrongPassword, 'Слишком много неверных паролей. Попробуйте через 15 минут.')
     }
-    if (this.cfg.password && !secretEquals(d.password, this.cfg.password)) {
+    const account = this.accountsMode ? await this.authenticate(s, d) : null
+    if (!account && this.cfg.password && !secretEquals(d.password, this.cfg.password)) {
       this.notePasswordFail(s.remoteAddress)
       this.log.warn(`${s.label}: неверный пароль`)
       // Небольшая задержка усложняет перебор пароля.
@@ -434,13 +474,14 @@ export class Hub {
       throw new RequestError(ErrorCode.WrongPassword, 'Неверный пароль сервера')
     }
     if (this.closing) throw new RequestError(ErrorCode.Internal, 'Сервер останавливается')
-    if (this.banned.has(d.clientId)) {
+    if (this.banned.has(account?.id ?? d.clientId)) {
       s.close(CloseCode.AuthFailed, 'banned')
       throw new RequestError(ErrorCode.Forbidden, 'Хост заблокировал вас на этом сервере до его перезапуска')
     }
 
-    const userId = d.clientId
-    const isAdmin = Boolean(this.cfg.adminToken && d.adminToken && secretEquals(d.adminToken, this.cfg.adminToken))
+    // С аккаунтами пользователь — это аккаунт (одинаковый на всех устройствах), без них — устройство.
+    const userId = account?.id ?? d.clientId
+    const isAdmin = Boolean(account?.isAdmin || (this.cfg.adminToken && d.adminToken && secretEquals(d.adminToken, this.cfg.adminToken)))
 
     // Тот же пользователь уже подключён (например, второе окно или «зависший» сокет) — вытесняем старое.
     const previous = this.byUser.get(userId)
@@ -460,7 +501,8 @@ export class Hub {
     // закрываем его, клиент сам заново войдёт в голос, если был там.
     if (returning) this.voice.leave(userId)
 
-    const nickname = this.uniqueNickname(d.nickname, userId)
+    // Ник аккаунта уникален (проверяется при смене), остальным уникальность обеспечиваем суффиксом.
+    const nickname = account ? account.nickname : this.uniqueNickname(d.nickname, userId)
     this.db.upsertUser(userId, nickname)
     s.userId = userId
     s.nickname = nickname
@@ -572,7 +614,13 @@ export class Hub {
       const prev = this.db.setUserAvatar(s.userId!, d.avatar)
       if (prev && prev !== d.avatar) this.files.deleteIds([prev])
     }
-    const nickname = this.uniqueNickname(d.nickname, s.userId!)
+    let nickname: string
+    if (this.accountsMode) {
+      if (this.db.nicknameTaken(d.nickname, s.userId!, true)) throw new RequestError(ErrorCode.BadRequest, 'Этот ник уже занят')
+      nickname = d.nickname
+    } else {
+      nickname = this.uniqueNickname(d.nickname, s.userId!)
+    }
     this.db.upsertUser(s.userId!, nickname)
     s.nickname = nickname
     const user = this.userInfo(s.userId!)
@@ -638,6 +686,94 @@ export class Hub {
     this.onSettingsChanged(next)
     this.log.info(`Хост изменил настройки: ${JSON.stringify(next)}`)
     return { settings: { ...next } }
+  }
+
+  /* ======================= аккаунты ======================= */
+
+  private accountInfo(a: StoredAccount): AccountInfo {
+    return {
+      id: a.id,
+      login: a.login,
+      nickname: a.nickname,
+      isAdmin: a.isAdmin,
+      disabled: a.disabled,
+      online: this.isOnline(a.id),
+      createdAt: a.createdAt,
+      lastSeen: a.lastSeen || null
+    }
+  }
+
+  private async changePassword(s: ClientSession, d: RequestMap['password-change']): Promise<ResponseMap['password-change']> {
+    const account = this.requireAccounts().getAccount(s.userId!)
+    if (!account) throw new RequestError(ErrorCode.NotFound, 'Аккаунт не найден')
+    if (!(await verifyPassword(d.oldPassword, account.passwordHash))) {
+      await new Promise((r) => setTimeout(r, 700))
+      throw new RequestError(ErrorCode.WrongPassword, 'Текущий пароль указан неверно')
+    }
+    this.db.updateAccount(account.id, { passwordHash: await hashPassword(d.newPassword) })
+    this.log.info(`${s.label} сменил(а) пароль`)
+    return {}
+  }
+
+  private async createAccount(d: RequestMap['account-create']): Promise<ResponseMap['account-create']> {
+    const db = this.requireAccounts()
+    if (db.getAccountByLogin(d.login)) throw new RequestError(ErrorCode.BadRequest, 'Такой логин уже есть')
+    if (db.listAccounts().length >= 500) throw new RequestError(ErrorCode.Forbidden, 'Слишком много аккаунтов (максимум 500)')
+    const account = db.createAccount(d.login, await hashPassword(d.password), d.isAdmin)
+    this.log.info(`Создан аккаунт «${account.login}»${account.isAdmin ? ' (администратор)' : ''}`)
+    return { account: this.accountInfo(account) }
+  }
+
+  private async updateAccount(self: ClientSession, d: RequestMap['account-update']): Promise<ResponseMap['account-update']> {
+    const db = this.requireAccounts()
+    const before = db.getAccount(d.accountId)
+    if (!before) throw new RequestError(ErrorCode.NotFound, 'Аккаунт не найден')
+    if (d.accountId === self.userId && (d.isAdmin === false || d.disabled === true)) {
+      throw new RequestError(ErrorCode.BadRequest, 'Нельзя снять права или отключить свой аккаунт')
+    }
+    const account = db.updateAccount(d.accountId, {
+      passwordHash: d.password !== undefined ? await hashPassword(d.password) : undefined,
+      isAdmin: d.isAdmin,
+      disabled: d.disabled
+    })!
+    if (d.disabled === true) this.forceDisconnect(account.id, 'Администратор отключил ваш аккаунт', 'disabled')
+    else if (d.isAdmin !== undefined && d.isAdmin !== before.isAdmin) {
+      const live = this.byUser.get(account.id)
+      if (live) {
+        // Права меняются со следующего входа: переподключаем, чтобы клиент получил новые.
+        this.forceDisconnect(account.id, d.isAdmin ? 'Вам выданы права администратора — войдите снова' : 'Права администратора сняты — войдите снова', 'kicked')
+      }
+    }
+    this.log.info(`Аккаунт «${account.login}» изменён администратором`)
+    return { account: this.accountInfo(account) }
+  }
+
+  private deleteAccount(self: ClientSession, d: RequestMap['account-delete']): Record<string, never> {
+    const db = this.requireAccounts()
+    if (d.accountId === self.userId) throw new RequestError(ErrorCode.BadRequest, 'Нельзя удалить свой аккаунт')
+    const account = db.getAccount(d.accountId)
+    if (!account) throw new RequestError(ErrorCode.NotFound, 'Аккаунт не найден')
+    db.deleteAccount(account.id)
+    this.forceDisconnect(account.id, 'Администратор удалил ваш аккаунт', 'disabled')
+    this.broadcast('user-left', { userId: account.id })
+    this.log.info(`Аккаунт «${account.login}» удалён`)
+    return {}
+  }
+
+  /** Отключает пользователя (и убирает ожидание переподключения). */
+  private forceDisconnect(userId: string, reason: string, closeReason: string): void {
+    const target = this.byUser.get(userId)
+    const pending = this.pendingLeave.get(userId)
+    if (target) {
+      target.event('server-closing', { reason })
+      target.close(CloseCode.Kicked, closeReason)
+    } else if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingLeave.delete(userId)
+      this.voice.leave(userId)
+      this.broadcast('user-left', { userId })
+      this.onOnlineChange(this.onlineCount)
+    }
   }
 
   private kick(self: ClientSession, d: RequestMap['admin-kick']): Record<string, never> {

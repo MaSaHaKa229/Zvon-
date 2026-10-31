@@ -1,5 +1,5 @@
 /** Версия протокола WebSocket. Клиент и сервер с разными версиями не соединяются. */
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5
 
 export const APP_NAME = 'Zvon'
 
@@ -22,6 +22,7 @@ export const LIMITS = {
   messageLength: 4000,
   nicknameLength: 32,
   passwordLength: 128,
+  accountPasswordMin: 6,
   serverNameLength: 48,
   channelNameLength: 40,
   historyPage: 50,

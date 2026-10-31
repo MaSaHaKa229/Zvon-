@@ -108,11 +108,13 @@ export class SettingsStore {
     this.update({ host })
   }
 
-  rememberServer(host: string, port: number, name: string, password?: string, adminToken?: string): RecentServer[] {
+  rememberServer(host: string, port: number, name: string, password?: string, adminToken?: string, login?: string): RecentServer[] {
     const rest = this.data.recentServers.filter((r) => !(r.host === host && r.port === port))
     const entry: RecentServer = { host, port, name, lastUsed: Date.now() }
     if (password) entry.password = password
     if (adminToken) entry.adminToken = adminToken
+    // Логин запоминаем всегда — его не секрет подставить в следующий раз.
+    if (login) entry.login = login
     const recentServers = [entry, ...rest].slice(0, MAX_RECENT)
     this.update({ recentServers })
     return recentServers

@@ -48,6 +48,8 @@ export interface ConnTarget {
   password: string
   /** Ключ администратора сервера (для сервера на VPS); пусто — обычный вход. */
   adminToken?: string
+  /** Логин аккаунта (сервер с аккаунтами); пусто — вход по нику. */
+  login?: string
   remember: boolean
 }
 
@@ -119,6 +121,8 @@ export interface AppState {
   /* ---- файлы ---- */
   fileToken: string
   maxUploadBytes: number
+  /** Логин аккаунта, если сервер работает с аккаунтами (иначе null). */
+  account: { login: string } | null
   drafts: Record<string, DraftAttachment[]>
   lightbox: LightboxState | null
 }
@@ -162,6 +166,7 @@ export const initialServerState = {
   focusedTile: null,
   fileToken: '',
   maxUploadBytes: 0,
+  account: null,
   drafts: {},
   lightbox: null
 } satisfies Partial<AppState>

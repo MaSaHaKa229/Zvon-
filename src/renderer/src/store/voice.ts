@@ -7,7 +7,7 @@ import type { ServerSnapshot, VoiceState } from '../../../shared/types'
 import type { ConnStatus, ZvonClient } from '../net/client'
 import { VoiceEngine, type ScreenShareOptions } from '../voice/engine'
 import { saveVoiceSettings, type VoiceSettings } from '../voice/settings'
-import { playSound, setSoundsOutput, type SoundName } from '../voice/sounds'
+import { playSound, resumeSounds, setSoundsOutput, type SoundName } from '../voice/sounds'
 import { closeAllPopouts, setPopoutWant, syncPopouts } from '../lib/popout'
 import { getApp, setApp } from './app'
 
@@ -292,13 +292,50 @@ function domBinding(): Extract<PttBinding, { type: 'dom' }> | null {
   return s.mode === 'ptt' && s.pttBinding?.type === 'dom' ? s.pttBinding : null
 }
 
+/** Играет ли на странице видео или звук со звуком (кроме звонка) — например, видео из чата. */
+function pageMediaPlaying(): boolean {
+  for (const el of document.querySelectorAll<HTMLMediaElement>('video, audio')) {
+    if (!el.paused && !el.ended && !el.muted && el.volume > 0) return true
+  }
+  return false
+}
+
+function resumeCallAudio(): void {
+  if (!engine || pageMediaPlaying()) return
+  engine.resumePlayback()
+  resumeSounds()
+}
+
+/**
+ * На телефонах видео из чата забирает звук у звонка, и браузер сам его не возвращает.
+ * Возобновляем звонок, когда видео остановлено или закрыто, по касанию экрана и на всякий случай раз в 2 секунды.
+ */
+function initPlaybackGuard(): void {
+  const onMediaStop = (e: Event): void => {
+    if (e.target instanceof HTMLMediaElement) setTimeout(resumeCallAudio, 300)
+  }
+  document.addEventListener('pause', onMediaStop, true)
+  document.addEventListener('ended', onMediaStop, true)
+  // Браузер разрешает запуск звука только после действия пользователя — касание подходит.
+  document.addEventListener('pointerdown', () => {
+    if (engine?.playbackStalled) resumeCallAudio()
+  })
+  setInterval(() => {
+    if (engine?.playbackStalled) resumeCallAudio()
+  }, 2000)
+}
+
 /** Один раз при запуске приложения: PTT из main-процесса и запасной вариант на клавишах окна. */
 export async function initVoiceGlobal(): Promise<void> {
   if (globalInit) return
   globalInit = true
   window.zvon.onPttChange(onPtt)
   // Свёрнутое или скрытое окно не смотрит видео — приём ставится на паузу.
-  document.addEventListener('visibilitychange', () => engine?.setPageVisible(document.visibilityState === 'visible'))
+  document.addEventListener('visibilitychange', () => {
+    engine?.setPageVisible(document.visibilityState === 'visible')
+    if (document.visibilityState === 'visible') resumeCallAudio()
+  })
+  initPlaybackGuard()
   window.addEventListener('keydown', (e) => {
     const b = domBinding()
     if (b && e.code === b.code && !e.repeat) onPtt(true)
