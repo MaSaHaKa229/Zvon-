@@ -65,7 +65,14 @@ interface RemoteAudio {
   el: HTMLAudioElement
   /** Состояние паузы, которое мы последним выставили (чтобы не слать лишние запросы). */
   playing: boolean
+  /** Усиление выше 100%: звук идёт через Web Audio, а элемент играет беззвучно. */
+  boost: { source: MediaStreamAudioSourceNode; gain: GainNode } | null
 }
+
+/** Максимальная громкость участника и звука демонстрации (2 = 200%). */
+export const MAX_VOLUME = 2
+
+type SinkableContext = AudioContext & { setSinkId?: (id: string) => Promise<void> }
 
 interface RemoteVideo {
   consumer: types.Consumer
@@ -492,7 +499,7 @@ export class VoiceEngine {
     if (this.deafened === deafened) return
     this.deafened = deafened
     for (const r of this.remotes.values()) {
-      r.el.muted = deafened
+      this.applyVolume(r)
       this.syncAudio(r)
     }
     this.applyTransmit()
@@ -778,14 +785,13 @@ export class VoiceEngine {
     const el = new Audio() as SinkableAudio
     el.autoplay = true
     el.srcObject = new MediaStream([consumer.track])
-    el.volume = this.volumeFor(info.userId)
-    el.muted = this.deafened
     const sink = this.settings().outputDeviceId
     if (sink && el.setSinkId) el.setSinkId(sink).catch((err) => console.warn('[voice] setSinkId', err))
     el.play().catch((err) => console.warn('[voice] воспроизведение не началось', err))
 
-    const remote: RemoteAudio = { consumer, userId: info.userId, source: info.source, el, playing: false }
+    const remote: RemoteAudio = { consumer, userId: info.userId, source: info.source, el, playing: false, boost: null }
     this.remotes.set(consumer.id, remote)
+    this.applyVolume(remote)
     consumer.on('trackended', () => this.removeRemote(consumer.id))
     consumer.on('transportclose', () => this.removeRemote(consumer.id))
     this.syncAudio(remote)
@@ -859,11 +865,15 @@ export class VoiceEngine {
     for (const r of this.remotes.values()) {
       if (r.el.paused) r.el.play().catch(() => undefined)
     }
+    if (this.boostCtx && this.boostCtx.state !== 'running' && this.boostCtx.state !== 'closed') void this.boostCtx.resume().catch(() => undefined)
   }
 
   /** Есть ли звук собеседников на паузе (нужно вернуть). */
   get playbackStalled(): boolean {
-    for (const r of this.remotes.values()) if (r.el.paused) return true
+    for (const r of this.remotes.values()) {
+      if (r.el.paused) return true
+      if (r.boost && this.boostCtx?.state !== 'running') return true
+    }
     return false
   }
 
@@ -935,6 +945,7 @@ export class VoiceEngine {
   }
 
   private disposeRemote(r: RemoteAudio): void {
+    this.dropBoost(r)
     try {
       r.el.pause()
       r.el.srcObject = null
@@ -965,13 +976,73 @@ export class VoiceEngine {
 
   /* ======================= громкость и вывод ======================= */
 
-  private volumeFor(userId: string): number {
-    const v = this.settings().userVolumes[userId]
-    return typeof v === 'number' ? Math.min(1, Math.max(0, v)) : 1
+  /** Громкость потока: голос — по участнику, звук демонстрации — отдельно (0…MAX_VOLUME). */
+  private volumeOf(r: RemoteAudio): number {
+    const s = this.settings()
+    const v = r.source === 'screen-audio' ? s.streamVolumes[r.userId] : s.userVolumes[r.userId]
+    return typeof v === 'number' && Number.isFinite(v) ? Math.min(MAX_VOLUME, Math.max(0, v)) : 1
   }
 
-  setUserVolume(userId: string, volume: number): void {
-    for (const r of this.remotes.values()) if (r.userId === userId) r.el.volume = Math.min(1, Math.max(0, volume))
+  /**
+   * До 100% громкость задаёт сам элемент. Выше — HTMLMediaElement не умеет, поэтому звук идёт
+   * через GainNode, а элемент продолжает играть беззвучно: без этого Chrome не отдаёт удалённый звук в Web Audio.
+   */
+  private applyVolume(r: RemoteAudio): void {
+    const v = this.volumeOf(r)
+    if (v <= 1) {
+      this.dropBoost(r)
+      r.el.volume = v
+      r.el.muted = this.deafened
+      return
+    }
+    r.el.volume = 1
+    r.el.muted = true
+    if (!r.boost) {
+      const ctx = this.boostContext()
+      if (!ctx) {
+        // Web Audio недоступен — играем на максимуме элемента.
+        r.el.muted = this.deafened
+        return
+      }
+      const source = ctx.createMediaStreamSource(new MediaStream([r.consumer.track]))
+      const gain = ctx.createGain()
+      source.connect(gain).connect(ctx.destination)
+      r.boost = { source, gain }
+    }
+    r.boost.gain.gain.value = this.deafened ? 0 : v
+  }
+
+  private dropBoost(r: RemoteAudio): void {
+    if (!r.boost) return
+    try {
+      r.boost.source.disconnect()
+      r.boost.gain.disconnect()
+    } catch {
+      /* уже отключено */
+    }
+    r.boost = null
+  }
+
+  private boostCtx: SinkableContext | null = null
+
+  private boostContext(): SinkableContext | null {
+    try {
+      if (!this.boostCtx || this.boostCtx.state === 'closed') {
+        this.boostCtx = new AudioContext() as SinkableContext
+        const sink = this.settings().outputDeviceId
+        if (sink && this.boostCtx.setSinkId) this.boostCtx.setSinkId(sink).catch((err) => console.warn('[voice] setSinkId', err))
+      }
+      if (this.boostCtx.state !== 'running') void this.boostCtx.resume().catch(() => undefined)
+      return this.boostCtx
+    } catch (err) {
+      console.warn('[voice] Web Audio недоступен', err)
+      return null
+    }
+  }
+
+  /** Применить громкости из настроек ко всем принимаемым потокам. */
+  refreshVolumes(): void {
+    for (const r of this.remotes.values()) this.applyVolume(r)
   }
 
   async setOutputDevice(deviceId: string): Promise<void> {
@@ -979,5 +1050,6 @@ export class VoiceEngine {
       const el = r.el as SinkableAudio
       if (el.setSinkId) await el.setSinkId(deviceId).catch((err) => console.warn('[voice] setSinkId', err))
     }
+    if (this.boostCtx?.setSinkId) await this.boostCtx.setSinkId(deviceId).catch((err) => console.warn('[voice] setSinkId', err))
   }
 }

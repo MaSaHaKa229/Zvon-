@@ -32,6 +32,7 @@ import {
 import { ScreenPicker } from './ScreenPicker'
 import { VoiceSettingsDialog } from './VoiceSettings'
 import { CAN_SHARE_SCREEN } from '../edition'
+import { MAX_VOLUME } from '../voice/engine'
 
 const EMPTY_LEVELS: Record<string, number> = {}
 
@@ -116,12 +117,13 @@ function VoiceMember({ state, speaking }: { state: VoiceState; speaking: boolean
             <input
               type="range"
               min={0}
-              max={100}
-              step={1}
+              max={MAX_VOLUME * 100}
+              step={5}
               value={Math.round(volume * 100)}
               onChange={(e) => setUserVolume(state.userId, Number(e.target.value) / 100)}
             />
           </label>
+          {volume > 1 && <p className="hint">{t('voice.boostHint')}</p>}
           <button className="btn btn-small btn-secondary" onClick={() => setUserVolume(state.userId, volume === 0 ? 1 : 0)}>
             {volume === 0 ? t('voice.localUnmute') : t('voice.localMute')}
           </button>

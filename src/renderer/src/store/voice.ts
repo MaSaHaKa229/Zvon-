@@ -5,7 +5,7 @@
 import type { PttBinding } from '../../../preload/api'
 import type { ServerSnapshot, VoiceState } from '../../../shared/types'
 import type { ConnStatus, ZvonClient } from '../net/client'
-import { VoiceEngine, type ScreenShareOptions } from '../voice/engine'
+import { MAX_VOLUME, VoiceEngine, type ScreenShareOptions } from '../voice/engine'
 import { saveVoiceSettings, type VoiceSettings } from '../voice/settings'
 import { playSound, resumeSounds, setSoundsOutput, type SoundName } from '../voice/sounds'
 import { closeAllPopouts, setPopoutWant, syncPopouts } from '../lib/popout'
@@ -240,9 +240,16 @@ export function toggleDeafen(): void {
 }
 
 export function setUserVolume(userId: string, volume: number): void {
-  const v = Math.min(1, Math.max(0, volume))
+  const v = Math.min(MAX_VOLUME, Math.max(0, volume))
   updateVoiceSettings({ userVolumes: { ...getApp().voiceSettings.userVolumes, [userId]: v } })
-  engine?.setUserVolume(userId, v)
+  engine?.refreshVolumes()
+}
+
+/** Громкость звука демонстрации экрана участника (отдельно от его голоса). */
+export function setStreamVolume(userId: string, volume: number): void {
+  const v = Math.min(MAX_VOLUME, Math.max(0, volume))
+  updateVoiceSettings({ streamVolumes: { ...getApp().voiceSettings.streamVolumes, [userId]: v } })
+  engine?.refreshVolumes()
 }
 
 export function updateVoiceSettings(patch: Partial<VoiceSettings>): void {

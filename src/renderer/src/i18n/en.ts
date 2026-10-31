@@ -114,6 +114,7 @@ const en: Dictionary = {
     pttHint: 'Hold «{{key}}» to talk',
     pttNoKey: 'Push-to-talk is on but no key is set — open settings',
     speakingNow: 'Speaking',
+    boostHint: 'Above 100% is a boost: too much may distort.',
     volume: 'Volume: {{value}}%',
     localMute: 'Mute for me',
     localUnmute: 'Unmute',
@@ -145,6 +146,8 @@ const en: Dictionary = {
   },
   stage: {
     live: 'LIVE',
+    streamVolume: 'Stream volume: {{value}}%',
+    streamMute: 'Mute stream audio',
     viewersTitle: 'Watching',
     viewersNone: 'Nobody is watching yet',
     toChat: 'Back to chat',

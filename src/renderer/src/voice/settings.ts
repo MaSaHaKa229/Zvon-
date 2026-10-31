@@ -35,8 +35,10 @@ export interface VoiceSettings {
   pttBinding: PttBinding | null
   /** Задержка отпускания PTT, мс: не обрезает конец фразы. */
   pttReleaseMs: number
-  /** Громкость участников 0…1 (по id пользователя). */
+  /** Громкость участников 0…2 (по id пользователя; больше 1 — усиление). */
   userVolumes: Record<string, number>
+  /** Громкость звука демонстрации экрана 0…2 (по id ведущего). */
+  streamVolumes: Record<string, number>
   sounds: boolean
   videoInputDeviceId: string
   screenQuality: ScreenQuality
@@ -63,6 +65,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   pttBinding: null,
   pttReleaseMs: 200,
   userVolumes: {},
+  streamVolumes: {},
   sounds: true,
   videoInputDeviceId: '',
   screenQuality: '1080p30',
@@ -83,6 +86,7 @@ export function loadVoiceSettings(): VoiceSettings {
       ...DEFAULT_VOICE_SETTINGS,
       ...parsed,
       userVolumes: { ...(parsed.userVolumes ?? {}) },
+      streamVolumes: { ...(parsed.streamVolumes ?? {}) },
       mode: parsed.mode === 'ptt' ? 'ptt' : 'voice',
       screenQuality: parsed.screenQuality && parsed.screenQuality in SCREEN_PRESETS ? parsed.screenQuality : '1080p30',
       screenContent: parsed.screenContent === 'motion' ? 'motion' : 'detail',

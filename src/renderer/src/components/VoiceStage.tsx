@@ -8,6 +8,7 @@ import {
   openScreenPicker,
   setFocusedTile,
   setManualLayer,
+  setStreamVolume,
   setWatching,
   stopScreenShare,
   toggleCamera,
@@ -15,7 +16,7 @@ import {
   toggleMute,
   wantVideo
 } from '../store/voice'
-import type { RemoteVideoView } from '../voice/engine'
+import { MAX_VOLUME, type RemoteVideoView } from '../voice/engine'
 import { Avatar } from './Common'
 import {
   CameraIcon,
@@ -135,6 +136,39 @@ export function VoiceStage() {
       <StageControls />
       {pickerOpen && <ScreenPicker />}
     </main>
+  )
+}
+
+/** Громкость звука демонстрации (отдельно от голоса ведущего), до 200%. */
+function StreamVolume({ streamerId }: { streamerId: string }) {
+  const { t } = useTranslation()
+  const volume = useApp((s) => s.voiceSettings.streamVolumes[streamerId] ?? 1)
+  const [open, setOpen] = useState(false)
+  const percent = Math.round(volume * 100)
+  return (
+    <div className="tile-menu-wrap" onDoubleClick={(e) => e.stopPropagation()}>
+      <button className={volume === 0 ? 'tile-btn off' : 'tile-btn'} title={t('stage.streamVolume', { value: percent })} onClick={() => setOpen((v) => !v)}>
+        <VolumeIcon width={16} height={16} />
+      </button>
+      {open && (
+        <div className="tile-menu stream-volume" onMouseLeave={() => setOpen(false)}>
+          <label className="volume-label">
+            {t('stage.streamVolume', { value: percent })}
+            <input
+              type="range"
+              min={0}
+              max={MAX_VOLUME * 100}
+              step={5}
+              value={percent}
+              onChange={(e) => setStreamVolume(streamerId, Number(e.target.value) / 100)}
+            />
+          </label>
+          <button className="btn btn-small btn-secondary" onClick={() => setStreamVolume(streamerId, volume === 0 ? 1 : 0)}>
+            {volume === 0 ? t('voice.localUnmute') : t('stage.streamMute')}
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -310,6 +344,7 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
             )}
           </div>
         )}
+        {tile.kind === 'screen' && remote?.hasAudio && showVideo && <StreamVolume streamerId={tile.userId} />}
         {tile.kind === 'screen' && remote && watching && (
           <button className="tile-btn" title={t('stage.stopWatching')} onClick={() => setWatching(tile.userId, false)}>
             <EyeOffIcon width={16} height={16} />
