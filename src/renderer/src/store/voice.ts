@@ -32,7 +32,10 @@ export function attachVoice(client: ZvonClient): void {
   engine = new VoiceEngine(
     (type, data) => client.request(type, data),
     {
-      onStatus: (voiceStatus, voiceError) => setApp({ voiceStatus, voiceError }),
+      onStatus: (voiceStatus, voiceError) => {
+        setCallAudioSession(voiceStatus === 'connecting' || voiceStatus === 'connected')
+        setApp({ voiceStatus, voiceError })
+      },
       onMicError: (micError) => setApp({ micError }),
       onFatalTransport: () => scheduleRejoin(500),
       onVideos: (remoteVideos) => {
@@ -297,6 +300,41 @@ async function configurePtt(): Promise<void> {
 function domBinding(): Extract<PttBinding, { type: 'dom' }> | null {
   const s = getApp().voiceSettings
   return s.mode === 'ptt' && s.pttBinding?.type === 'dom' ? s.pttBinding : null
+}
+
+/**
+ * Safari 16.4+: общий режим звука «запись и воспроизведение» на время звонка. Тогда видео из чата
+ * играет вместе со звонком и не переключает телефон в режим «только воспроизведение», который глушит микрофон.
+ */
+type AudioSessionNavigator = Navigator & { audioSession?: { type: string } }
+
+export function setCallAudioSession(inCall: boolean): void {
+  const session = (navigator as AudioSessionNavigator).audioSession
+  if (!session) return
+  try {
+    session.type = inCall ? 'play-and-record' : 'auto'
+  } catch {
+    /* старый Safari */
+  }
+}
+
+let pageMediaCount = 0
+let recoverTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Видео или аудио из чата начало или перестало играть. После остановки восстанавливаем звонок:
+ * на iPhone система могла забрать у него звук и микрофон.
+ */
+export function notifyPageMedia(playing: boolean): void {
+  pageMediaCount = Math.max(0, pageMediaCount + (playing ? 1 : -1))
+  if (recoverTimer) clearTimeout(recoverTimer)
+  recoverTimer = null
+  if (playing || pageMediaCount > 0 || !engine) return
+  recoverTimer = setTimeout(() => {
+    recoverTimer = null
+    if (pageMediaCount === 0) void engine?.recoverAudio()
+    resumeSounds()
+  }, 400)
 }
 
 /** Играет ли на странице видео или звук со звуком (кроме звонка) — например, видео из чата. */

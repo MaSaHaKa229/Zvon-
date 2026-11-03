@@ -784,6 +784,7 @@ export class VoiceEngine {
   private async addAudio(consumer: types.Consumer, info: ConsumerInfo): Promise<void> {
     const el = new Audio() as SinkableAudio
     el.autoplay = true
+    el.setAttribute('playsinline', '')
     el.srcObject = new MediaStream([consumer.track])
     const sink = this.settings().outputDeviceId
     if (sink && el.setSinkId) el.setSinkId(sink).catch((err) => console.warn('[voice] setSinkId', err))
@@ -866,6 +867,43 @@ export class VoiceEngine {
       if (r.el.paused) r.el.play().catch(() => undefined)
     }
     if (this.boostCtx && this.boostCtx.state !== 'running' && this.boostCtx.state !== 'closed') void this.boostCtx.resume().catch(() => undefined)
+  }
+
+  /**
+   * Полное восстановление звука после того, как его забрало видео (iPhone, Safari):
+   * пересоздаёт элементы воспроизведения, будит Web Audio и переоткрывает микрофон,
+   * если система его приглушила или остановила. Без перезахода в канал.
+   */
+  async recoverAudio(): Promise<void> {
+    if (!this.inChannel || !this.ready) return
+    for (const r of this.remotes.values()) {
+      if (r.consumer.closed) continue
+      this.dropBoost(r)
+      const old = r.el
+      try {
+        old.pause()
+        old.srcObject = null
+      } catch {
+        /* ignore */
+      }
+      const el = new Audio() as SinkableAudio
+      el.autoplay = true
+      el.setAttribute('playsinline', '')
+      el.srcObject = new MediaStream([r.consumer.track])
+      const sink = this.settings().outputDeviceId
+      if (sink && el.setSinkId) el.setSinkId(sink).catch(() => undefined)
+      r.el = el
+      this.applyVolume(r)
+      el.play().catch(() => undefined)
+    }
+    if (this.boostCtx && this.boostCtx.state !== 'running' && this.boostCtx.state !== 'closed') {
+      await this.boostCtx.resume().catch(() => undefined)
+    }
+    const micDead = this.micStream?.getAudioTracks().some((t) => t.readyState === 'ended' || t.muted) ?? false
+    if (micDead) {
+      console.warn('[voice] микрофон приглушён системой после видео — переоткрываю')
+      await this.restartMic()
+    }
   }
 
   /** Есть ли звук собеседников на паузе (нужно вернуть). */

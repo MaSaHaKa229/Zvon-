@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type SyntheticEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { FileInfo } from '../../../shared/types'
 import { fileUrl, formatDuration, formatSize } from '../lib/files'
 import { setApp, useApp } from '../store/app'
+import { notifyPageMedia } from '../store/voice'
 import { CloseIcon, DownloadIcon, FileIcon } from './Icons'
 
 const MAX_W = 400
@@ -55,6 +56,35 @@ function ImageAttachment({ file, gallery }: { file: FileInfo; gallery: FileInfo[
   )
 }
 
+/**
+ * Видео и аудио из чата сообщают звонку, что играют: после остановки звонок восстанавливает свой звук
+ * (на iPhone система забирает его у звонка). Каждый элемент учитывается не больше одного раза.
+ */
+const playingMedia = new WeakSet<HTMLMediaElement>()
+
+function mediaStarted(el: HTMLMediaElement): void {
+  if (playingMedia.has(el)) return
+  playingMedia.add(el)
+  notifyPageMedia(true)
+}
+
+function mediaStopped(el: HTMLMediaElement): void {
+  if (!playingMedia.delete(el)) return
+  notifyPageMedia(false)
+}
+
+const callFriendlyMedia = {
+  onPlay: (e: SyntheticEvent<HTMLMediaElement>) => mediaStarted(e.currentTarget),
+  onPause: (e: SyntheticEvent<HTMLMediaElement>) => mediaStopped(e.currentTarget),
+  onEnded: (e: SyntheticEvent<HTMLMediaElement>) => mediaStopped(e.currentTarget),
+  onEmptied: (e: SyntheticEvent<HTMLMediaElement>) => mediaStopped(e.currentTarget),
+  // Элемент убрали со страницы прямо во время воспроизведения (сообщение удалили, канал сменили).
+  ref: (el: HTMLMediaElement | null) => {
+    if (!el) return
+    return () => mediaStopped(el)
+  }
+}
+
 function VideoAttachment({ file }: { file: FileInfo }) {
   const { t } = useTranslation()
   const [error, setError] = useState(false)
@@ -66,7 +96,16 @@ function VideoAttachment({ file }: { file: FileInfo }) {
       {error ? (
         <div className="attach-error">{t('files.cantPlay')}</div>
       ) : (
-        <video src={src ?? undefined} poster={poster} controls preload="metadata" style={size} onError={() => setError(true)} />
+        <video
+          src={src ?? undefined}
+          poster={poster}
+          controls
+          playsInline
+          preload="metadata"
+          style={size}
+          onError={() => setError(true)}
+          {...callFriendlyMedia}
+        />
       )}
       <div className="attach-meta">
         <span className="attach-name" title={file.name}>
@@ -99,7 +138,7 @@ function AudioAttachment({ file }: { file: FileInfo }) {
           <DownloadIcon width={16} height={16} />
         </button>
       </div>
-      <audio src={src ?? undefined} controls preload="metadata" />
+      <audio src={src ?? undefined} controls preload="metadata" {...callFriendlyMedia} />
     </div>
   )
 }
