@@ -1707,9 +1707,13 @@ input[type='range'] {
   object-fit: cover;
 }
 
-/* Своя камера — зеркально, как в зеркале. */
+/* Своя камера — зеркально, как в зеркале. Основная камера телефона — как есть, иначе надписи задом наперёд. */
 .tile.cam.me video {
   transform: scaleX(-1);
+}
+
+.tile.cam.me.rear video {
+  transform: none;
 }
 
 .tile video.hidden {

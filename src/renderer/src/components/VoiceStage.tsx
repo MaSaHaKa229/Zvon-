@@ -9,6 +9,7 @@ import {
   setFocusedTile,
   setManualLayer,
   setStreamVolume,
+  switchCamera,
   setWatching,
   stopScreenShare,
   toggleCamera,
@@ -21,6 +22,7 @@ import { Avatar } from './Common'
 import {
   CameraIcon,
   CameraOffIcon,
+  SwitchCameraIcon,
   EyeIcon,
   EyeOffIcon,
   ExpandIcon,
@@ -206,6 +208,7 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
   const levels = useApp((s) => (s.voiceChannelId ? s.speaking[s.voiceChannelId] : undefined)) ?? EMPTY
   const watching = useApp((s) => Boolean(s.watching[tile.userId]))
   const focused = useApp((s) => s.focusedTile === tile.key)
+  const rearCamera = useApp((s) => s.localMedia.cameraFacing === 'environment')
   const myId = useApp((s) => s.me?.id)
   const boxRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -278,7 +281,7 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
   return (
     <div
       ref={boxRef}
-      className={['tile', tile.kind, speaking ? 'speaking' : '', big ? 'big' : '', showVideo ? 'has-video' : '', isMe ? 'me' : ''].join(' ')}
+      className={['tile', tile.kind, speaking ? 'speaking' : '', big ? 'big' : '', showVideo ? 'has-video' : '', isMe ? 'me' : '', isMe && rearCamera ? 'rear' : ''].join(' ')}
       onDoubleClick={toggleFullscreen}
     >
       <video ref={videoRef} autoPlay playsInline muted className={showVideo ? '' : 'hidden'} />
@@ -381,6 +384,7 @@ export function StageControls() {
   const muted = useApp((s) => s.selfMuted)
   const deafened = useApp((s) => s.selfDeafened)
   const camera = useApp((s) => s.localMedia.camera)
+  const canSwitch = useApp((s) => s.localMedia.canSwitchCamera)
   const screen = useApp((s) => s.localMedia.screen)
   const connected = useApp((s) => s.voiceStatus === 'connected')
 
@@ -400,6 +404,11 @@ export function StageControls() {
       >
         {camera ? <CameraIcon /> : <CameraOffIcon />}
       </button>
+      {camera && canSwitch && (
+        <button className="round-btn" disabled={!connected} title={t('stage.switchCamera')} onClick={() => void switchCamera()}>
+          <SwitchCameraIcon />
+        </button>
+      )}
       {CAN_SHARE_SCREEN && (
         <button
           className={screen ? 'round-btn on' : 'round-btn'}

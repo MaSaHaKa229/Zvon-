@@ -202,6 +202,7 @@ const ru = {
     qualityLow: 'Низкое',
     paused: 'Пауза',
     cameraOn: 'Включить камеру',
+    switchCamera: 'Сменить камеру (фронтальная / основная)',
     cameraOff: 'Выключить камеру',
     shareScreen: 'Демонстрация экрана',
     stopShare: 'Остановить демонстрацию',

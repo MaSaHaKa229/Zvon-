@@ -581,6 +581,17 @@ export async function toggleCamera(): Promise<void> {
   }
 }
 
+/** Переключить камеру: на телефоне — фронтальная ⇄ основная, на компьютере — следующая. */
+export async function switchCamera(): Promise<void> {
+  if (!engine) return
+  setApp({ mediaError: null })
+  try {
+    await engine.switchCamera()
+  } catch (err) {
+    setApp({ mediaError: (err as Error).message })
+  }
+}
+
 export function openScreenPicker(): void {
   if (!getApp().voiceChannelId) return
   setApp({ screenPickerOpen: true, mediaError: null })

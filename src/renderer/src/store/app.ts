@@ -204,7 +204,7 @@ export const initialServerState = {
   pttPressed: false,
   mainView: 'chat',
   remoteVideos: [],
-  localMedia: { camera: null, screen: null, screenHasAudio: false },
+  localMedia: { camera: null, screen: null, screenHasAudio: false, cameraFacing: null, canSwitchCamera: false },
   mediaError: null,
   screenPickerOpen: false,
   watching: {},

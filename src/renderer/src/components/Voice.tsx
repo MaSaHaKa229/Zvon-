@@ -9,6 +9,7 @@ import {
   setUserVolume,
   showVoiceView,
   stopScreenShare,
+  switchCamera,
   toggleCamera,
   toggleDeafen,
   toggleMute
@@ -17,6 +18,7 @@ import { Avatar } from './Common'
 import {
   CameraIcon,
   CameraOffIcon,
+  SwitchCameraIcon,
   FocusIcon,
   GearIcon,
   HeadphonesIcon,
@@ -145,6 +147,7 @@ export function VoicePanel() {
   const pttPressed = useApp((s) => s.pttPressed)
   const serverName = useApp((s) => s.serverName)
   const camera = useApp((s) => s.localMedia.camera)
+  const canSwitch = useApp((s) => s.localMedia.canSwitchCamera)
   const screen = useApp((s) => s.localMedia.screen)
   const mediaError = useApp((s) => s.mediaError)
   const pickerOpen = useApp((s) => s.screenPickerOpen)
@@ -183,6 +186,11 @@ export function VoicePanel() {
           <button className={camera ? 'panel-btn on' : 'panel-btn'} title={camera ? t('stage.cameraOff') : t('stage.cameraOn')} onClick={() => void toggleCamera()}>
             {camera ? <CameraIcon width={18} height={18} /> : <CameraOffIcon width={18} height={18} />}
           </button>
+          {camera && canSwitch && (
+            <button className="panel-btn" title={t('stage.switchCamera')} onClick={() => void switchCamera()}>
+              <SwitchCameraIcon width={18} height={18} />
+            </button>
+          )}
           {CAN_SHARE_SCREEN && (
             <button
               className={screen ? 'panel-btn on' : 'panel-btn'}

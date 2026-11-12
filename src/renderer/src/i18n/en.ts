@@ -204,6 +204,7 @@ const en: Dictionary = {
     qualityLow: 'Low',
     paused: 'Paused',
     cameraOn: 'Turn on camera',
+    switchCamera: 'Switch camera (front / back)',
     cameraOff: 'Turn off camera',
     shareScreen: 'Share screen',
     stopShare: 'Stop sharing',

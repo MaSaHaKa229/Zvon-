@@ -37,7 +37,18 @@ export interface LocalMedia {
   camera: MediaStreamTrack | null
   screen: MediaStreamTrack | null
   screenHasAudio: boolean
+  /** Какая камера телефона включена: фронтальная (user) или основная (environment); null — неизвестно (компьютер). */
+  cameraFacing: CameraFacing | null
+  /** Камер больше одной — можно переключать. */
+  canSwitchCamera: boolean
 }
+
+export type CameraFacing = 'user' | 'environment'
+
+/** Телефон или планшет: там камеры выбираются по направлению (фронтальная/основная), а не по устройству. */
+const IS_TOUCH_DEVICE =
+  typeof navigator !== 'undefined' &&
+  (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
 
 export interface EngineHooks {
   onStatus(status: VoiceStatus, error: string | null): void
@@ -669,7 +680,96 @@ export class VoiceEngine {
   /* ======================= камера ======================= */
 
   private emitLocal(): void {
-    this.hooks.onLocalMedia({ camera: this.cameraTrack, screen: this.screenTrack, screenHasAudio: this.screenAudioTrack !== null })
+    this.hooks.onLocalMedia({
+      camera: this.cameraTrack,
+      screen: this.screenTrack,
+      screenHasAudio: this.screenAudioTrack !== null,
+      cameraFacing: this.cameraTrack ? this.cameraFacing : null,
+      canSwitchCamera: this.cameraTrack !== null && this.cameraCount > 1
+    })
+  }
+
+  /** Направление камеры на телефоне; на компьютере null (камеру выбирают в настройках). */
+  private cameraFacing: CameraFacing | null = IS_TOUCH_DEVICE ? 'user' : null
+  /** Камера, выбранная кнопкой переключения на компьютере (вместо камеры из настроек). */
+  private cameraDeviceOverride: string | null = null
+  private cameraCount = 0
+  private switchingCamera = false
+
+  private async countCameras(): Promise<void> {
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices()
+      this.cameraCount = list.filter((d) => d.kind === 'videoinput').length
+    } catch {
+      this.cameraCount = 0
+    }
+  }
+
+  /** Ограничения для камеры: на телефоне — по направлению, на компьютере — по устройству. */
+  private cameraConstraints(exactFacing = false): MediaTrackConstraints {
+    const base: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+    if (this.cameraFacing) return { ...base, facingMode: exactFacing ? { exact: this.cameraFacing } : { ideal: this.cameraFacing } }
+    const deviceId = this.cameraDeviceOverride ?? this.settings().videoInputDeviceId
+    return { ...base, deviceId: deviceId ? { exact: deviceId } : undefined }
+  }
+
+  private async openCamera(exactFacing = false): Promise<MediaStreamTrack> {
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: this.cameraConstraints(exactFacing) })
+    } catch (err) {
+      throw new Error(mediaErrorText(err, 'камера'))
+    }
+    const track = stream.getVideoTracks()[0]
+    if (!track) throw new Error('Камера не выдала видеодорожку')
+    track.contentHint = 'motion'
+    track.addEventListener('ended', () => {
+      // Остановленная при переключении дорожка — не повод выключать камеру.
+      if (this.cameraTrack === track) void this.stopCamera()
+    })
+    return track
+  }
+
+  /**
+   * Переключение камеры без выключения: на телефоне — фронтальная ⇄ основная, на компьютере — следующая камера.
+   * Старую камеру останавливаем до открытия новой: многие телефоны не дают открыть две сразу.
+   */
+  async switchCamera(): Promise<void> {
+    if (!this.cameraTrack || this.switchingCamera) return
+    this.switchingCamera = true
+    const prevFacing = this.cameraFacing
+    const prevOverride = this.cameraDeviceOverride
+    try {
+      if (this.cameraFacing) {
+        this.cameraFacing = this.cameraFacing === 'user' ? 'environment' : 'user'
+      } else {
+        const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
+        if (cams.length < 2) return
+        const current = this.cameraTrack.getSettings().deviceId
+        const i = cams.findIndex((d) => d.deviceId === current)
+        this.cameraDeviceOverride = cams[(i + 1) % cams.length].deviceId
+      }
+      const old = this.cameraTrack
+      old.stop()
+      let track: MediaStreamTrack
+      try {
+        track = await this.openCamera(true).catch(() => this.openCamera(false))
+      } catch (err) {
+        // Новая камера не открылась — возвращаем прежнюю.
+        this.cameraFacing = prevFacing
+        this.cameraDeviceOverride = prevOverride
+        track = await this.openCamera(false)
+        this.cameraTrack = track
+        await this.cameraProducer?.replaceTrack({ track })
+        this.emitLocal()
+        throw err
+      }
+      this.cameraTrack = track
+      await this.cameraProducer?.replaceTrack({ track })
+      this.emitLocal()
+    } finally {
+      this.switchingCamera = false
+    }
   }
 
   private vp8(): types.RtpCodecCapability | undefined {
@@ -684,26 +784,10 @@ export class VoiceEngine {
     if (!this.ready || !this.sendT) throw new Error('Сначала войдите в голосовой канал')
     if (this.cameraTrack) return
     if (!(await window.zvon.ensureMediaAccess('camera'))) throw new Error(mediaErrorText({ name: 'NotAllowedError' }, 'камера'))
-    const deviceId = this.settings().videoInputDeviceId
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 30 }
-        }
-      })
-    } catch (err) {
-      throw new Error(mediaErrorText(err, 'камера'))
-    }
-    const track = stream.getVideoTracks()[0]
-    if (!track) throw new Error('Камера не выдала видеодорожку')
-    track.contentHint = 'motion'
-    track.addEventListener('ended', () => void this.stopCamera())
+    const track = await this.openCamera()
     this.cameraTrack = track
+    // Список камер виден только после разрешения — считаем после открытия.
+    await this.countCameras()
     this.emitLocal()
     try {
       await this.produceCamera(this.gen)

@@ -135,6 +135,13 @@ export const SignalIcon = (p: P) => (
     <path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4v16" />
   </svg>
 )
+export const SwitchCameraIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M20 7h-3l-2-3H9L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" />
+    <path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2" />
+    <path d="M14.5 9.5v1.7h-1.7M9.5 16.5v-1.7h1.7" />
+  </svg>
+)
 export const CameraIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="m23 7-7 5 7 5V7z" />
