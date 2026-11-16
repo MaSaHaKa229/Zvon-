@@ -170,6 +170,12 @@ export const ExpandIcon = (p: P) => (
     <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
   </svg>
 )
+export const PipIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M21 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+    <rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none" />
+  </svg>
+)
 export const PopoutIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3" />

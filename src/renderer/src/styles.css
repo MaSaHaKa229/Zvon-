@@ -2790,6 +2790,10 @@ input[type='range'] {
   color: var(--text);
 }
 
+/* Кнопка во включённом состоянии (например, картинка-в-картинке открыта). */
+.tile-btn.on {
+  color: var(--accent, #5865f2);
+}
 .tile-btn.off {
   color: var(--red);
 }

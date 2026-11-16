@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { isPoppedOut, openPopout } from '../lib/popout'
+import { isPoppedOut, openPopout, popoutViewer } from '../lib/popout'
+import { enterNativeVideoFullscreen, onPipChange, pipSupported, togglePip } from '../lib/pip'
 import { useApp } from '../store/app'
 import { selectChannel } from '../store/session'
 import {
@@ -32,13 +33,14 @@ import {
   MicIcon,
   MicOffIcon,
   PhoneOffIcon,
+  PipIcon,
   PopoutIcon,
   ScreenIcon,
   ScreenOffIcon,
   VolumeIcon
 } from './Icons'
 import { ScreenPicker } from './ScreenPicker'
-import { CAN_SHARE_SCREEN } from '../edition'
+import { CAN_SHARE_SCREEN, IS_PHONE } from '../edition'
 
 interface TileModel {
   key: string
@@ -215,6 +217,7 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
   const [width, setWidth] = useState(0)
   const [visible, setVisible] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
+  const [pip, setPip] = useState(false)
   const [menu, setMenu] = useState(false)
   const [, rerender] = useState(0)
 
@@ -254,6 +257,13 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
     }
   }, [track, needsWatch])
 
+  // Картинка-в-картинке: окошко живёт и когда страница скрыта, поэтому поток держим как у отдельного окна.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    return onPipChange(v, setPip)
+  }, [])
+
   const consumerId = remote?.consumerId
   const maxLayer = (remote?.spatialLayers ?? 1) - 1
   const wantLayer = fullscreen || big ? maxLayer : layerForWidth(width || 640, maxLayer)
@@ -264,12 +274,28 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
     wantVideo(consumerId, viewer, wanted ? wantLayer : null)
     return () => wantVideo(consumerId, viewer, null)
   }, [consumerId, wanted, wantLayer, tile.key])
+  useEffect(() => {
+    if (!consumerId || !pip) return
+    const viewer = popoutViewer(`pip:${tile.key}`)
+    wantVideo(consumerId, viewer, maxLayer)
+    return () => wantVideo(consumerId, viewer, null)
+  }, [consumerId, pip, maxLayer, tile.key])
 
   const toggleFullscreen = (): void => {
     const el = boxRef.current
     if (!el) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void el.requestFullscreen().catch(() => undefined)
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+      return
+    }
+    // iPhone не разворачивает блок страницы — только видео в системном плеере.
+    if (typeof el.requestFullscreen !== 'function' && videoRef.current?.srcObject && enterNativeVideoFullscreen(videoRef.current)) return
+    void el.requestFullscreen?.().catch(() => undefined)
+  }
+  const onPip = (): void => {
+    const v = videoRef.current
+    if (!v) return
+    togglePip(v).catch((err) => console.warn('[stage] картинка-в-картинке', err))
   }
 
   const labels = qualityLabels(t, remote?.spatialLayers ?? 1)
@@ -353,7 +379,12 @@ function VideoTile({ tile, big = false }: { tile: TileModel; big?: boolean }) {
             <EyeOffIcon width={16} height={16} />
           </button>
         )}
-        {remote && showVideo && (
+        {remote && showVideo && pipSupported() && (
+          <button className={pip ? 'tile-btn on' : 'tile-btn'} title={pip ? t('stage.pipOff') : t('stage.pip')} onClick={onPip}>
+            <PipIcon width={16} height={16} />
+          </button>
+        )}
+        {remote && showVideo && !IS_PHONE && (
           <button
             className="tile-btn"
             title={t('stage.popout')}

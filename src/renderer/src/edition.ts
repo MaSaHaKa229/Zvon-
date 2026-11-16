@@ -14,3 +14,8 @@ export function webTarget(): { host: string; port: number } {
 
 /** Демонстрация экрана доступна (в мобильных браузерах её нет). */
 export const CAN_SHARE_SCREEN = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
+
+/** Телефон или планшет: отдельные окна браузера там не работают, вместо них — картинка-в-картинке. */
+export const IS_PHONE =
+  typeof navigator !== 'undefined' &&
+  (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))

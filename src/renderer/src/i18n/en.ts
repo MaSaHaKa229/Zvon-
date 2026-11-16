@@ -193,6 +193,8 @@ const en: Dictionary = {
     watch: 'Watch stream',
     stopWatching: 'Stop watching',
     popout: 'Open in a separate window',
+    pip: 'Picture-in-picture',
+    pipOff: 'Leave picture-in-picture',
     fullscreen: 'Fullscreen',
     exitFullscreen: 'Exit fullscreen',
     focus: 'Focus',
